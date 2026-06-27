@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.27.3",
-  "notes": "trigger hitbox tuning exposed in panel",
+  "version": "2026.06.27.4",
+  "notes": "panel updater default manifest moved to Gitee",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -9,9 +9,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "https://gitee.com/w246006/246006/raw/main/release_assets/neko-core-v2026.06.27.3.zip",
-      "sha256": "A1D3AC2AD2057D90957647F82FE72BD4F7FE04F5C543F057DF11280AEF1A5C13",
-      "size": 207156
+      "url": "https://gitee.com/w246006/246006/raw/main/release_assets/neko-core-v2026.06.27.4.zip",
+      "sha256": "29E60F33868EC9824794CAB2457A9A5CC379EA4DB04101D404D6244C0E9131CC",
+      "size": 207142
     }
   ]
 }

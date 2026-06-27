@@ -199,7 +199,7 @@ class QmlBridge(QObject):
     updateStatusSampled = Signal(object)
 
     SAVE_FILE = "gui_settings.json"
-    DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/vjvjgchj/246006/main/updates/stable.json"
+    DEFAULT_UPDATE_MANIFEST_URL = "https://gitee.com/w246006/246006/raw/main/updates/stable.json"
     KALMAN_PRED_DEFAULT = 1.0
     KALMAN_PRED_MIN = 0.0
     KALMAN_PRED_MAX = 4.0
