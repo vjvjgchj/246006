@@ -286,6 +286,9 @@ class QmlBridge(QObject):
         self.fps_limit = 0
         self.trigger_mode = "关闭"
         self.trigger_delay = 100.0
+        self.trigger_hitbox_enter_scale = 1.45
+        self.trigger_hitbox_exit_scale = 1.80
+        self.trigger_hold_grace_ms = 120.0
         self.kalman_en = False
         self.kalman_pred = self.KALMAN_PRED_DEFAULT
         self.recoil_en = False
@@ -891,6 +894,24 @@ class QmlBridge(QObject):
         self.trigger_delay = self._coerce_float(
             data.get("trigger_delay", self.trigger_delay), self.trigger_delay
         )
+        self.trigger_hitbox_enter_scale = self._clamp_float(
+            data.get("trigger_hitbox_enter_scale", self.trigger_hitbox_enter_scale),
+            self.trigger_hitbox_enter_scale,
+            0.50,
+            2.50,
+        )
+        self.trigger_hitbox_exit_scale = self._clamp_float(
+            data.get("trigger_hitbox_exit_scale", self.trigger_hitbox_exit_scale),
+            self.trigger_hitbox_exit_scale,
+            0.50,
+            3.00,
+        )
+        self.trigger_hold_grace_ms = self._clamp_float(
+            data.get("trigger_hold_grace_ms", self.trigger_hold_grace_ms),
+            self.trigger_hold_grace_ms,
+            0.0,
+            250.0,
+        )
         self.kalman_en = self._coerce_bool(data.get("kalman_en", self.kalman_en), self.kalman_en)
         self.kalman_pred = self._normalize_kalman_pred(data.get("kalman_pred", self.kalman_pred), self.kalman_pred)
         self.recoil_en = self._coerce_bool(data.get("recoil_en", self.recoil_en), self.recoil_en)
@@ -987,6 +1008,9 @@ class QmlBridge(QObject):
                 "recoil_delay": self.recoil_delay,
                 "trigger_mode": self.trigger_mode,
                 "trigger_delay": self.trigger_delay,
+                "trigger_hitbox_enter_scale": self.trigger_hitbox_enter_scale,
+                "trigger_hitbox_exit_scale": self.trigger_hitbox_exit_scale,
+                "trigger_hold_grace_ms": self.trigger_hold_grace_ms,
                 "stick_enable": self.stick_enable,
                 "stick_int": self.stick_int,
                 "stick_rad": self.stick_rad,
@@ -1053,6 +1077,24 @@ class QmlBridge(QObject):
         self.recoil_delay = float(settings.get("recoil_delay", self.recoil_delay))
         self.trigger_mode = str(settings.get("trigger_mode", self.trigger_mode)) or "关闭"
         self.trigger_delay = float(settings.get("trigger_delay", self.trigger_delay))
+        self.trigger_hitbox_enter_scale = self._clamp_float(
+            settings.get("trigger_hitbox_enter_scale", self.trigger_hitbox_enter_scale),
+            self.trigger_hitbox_enter_scale,
+            0.50,
+            2.50,
+        )
+        self.trigger_hitbox_exit_scale = self._clamp_float(
+            settings.get("trigger_hitbox_exit_scale", self.trigger_hitbox_exit_scale),
+            self.trigger_hitbox_exit_scale,
+            0.50,
+            3.00,
+        )
+        self.trigger_hold_grace_ms = self._clamp_float(
+            settings.get("trigger_hold_grace_ms", self.trigger_hold_grace_ms),
+            self.trigger_hold_grace_ms,
+            0.0,
+            250.0,
+        )
         self.stick_enable = self._coerce_bool(
             settings.get("stick_enable", settings.get("stick_en", self.stick_enable)), self.stick_enable
         )
@@ -2132,9 +2174,9 @@ class QmlBridge(QObject):
                 f.write(f"trigger_delay={self.trigger_delay:.1f}\n")
                 f.write("trigger_click_hold_ms=45.0\n")
                 f.write("trigger_click_gap_ms=10.0\n")
-                f.write("trigger_hitbox_enter_scale=1.10\n")
-                f.write("trigger_hitbox_exit_scale=1.35\n")
-                f.write("trigger_hold_grace_ms=70.0\n")
+                f.write(f"trigger_hitbox_enter_scale={self.trigger_hitbox_enter_scale:.2f}\n")
+                f.write(f"trigger_hitbox_exit_scale={self.trigger_hitbox_exit_scale:.2f}\n")
+                f.write(f"trigger_hold_grace_ms={self.trigger_hold_grace_ms:.1f}\n")
                 f.write(f"use_lghub={1 if self.lghub_enabled else 0}\n")
                 f.write(f"esp32_enabled={1 if self.esp32_enabled else 0}\n")
                 f.write(f"esp32_port={self.esp32_port}\n")
@@ -2390,6 +2432,15 @@ class QmlBridge(QObject):
     def _get_trigger_delay(self):
         return self.trigger_delay
 
+    def _get_trigger_hitbox_enter_scale(self):
+        return self.trigger_hitbox_enter_scale
+
+    def _get_trigger_hitbox_exit_scale(self):
+        return self.trigger_hitbox_exit_scale
+
+    def _get_trigger_hold_grace_ms(self):
+        return self.trigger_hold_grace_ms
+
     def _get_card_opacity(self):
         return self.card_opacity
 
@@ -2632,6 +2683,9 @@ class QmlBridge(QObject):
     fpsLimitValue = Property(int, _get_fps_limit, notify=stateChanged)
     triggerModeValue = Property(str, _get_trigger_mode, notify=stateChanged)
     triggerDelayValue = Property(float, _get_trigger_delay, notify=stateChanged)
+    triggerHitboxEnterScaleValue = Property(float, _get_trigger_hitbox_enter_scale, notify=stateChanged)
+    triggerHitboxExitScaleValue = Property(float, _get_trigger_hitbox_exit_scale, notify=stateChanged)
+    triggerHoldGraceMsValue = Property(float, _get_trigger_hold_grace_ms, notify=stateChanged)
     cardOpacityValue = Property(int, _get_card_opacity, notify=stateChanged)
     themeNameValue = Property(str, _get_theme_name, notify=stateChanged)
     customThemeColorValue = Property(str, _get_custom_theme_color, notify=stateChanged)

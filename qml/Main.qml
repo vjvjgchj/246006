@@ -997,6 +997,9 @@ ApplicationWindow {
             fps_limit: fpsLimitField.text,
             trigger_mode: triggerModeBox.currentText,
             trigger_delay: triggerDelayField.text,
+            trigger_hitbox_enter_scale: triggerHitboxEnterField.text,
+            trigger_hitbox_exit_scale: triggerHitboxExitField.text,
+            trigger_hold_grace_ms: triggerHoldGraceField.text,
             kalman_en: kalmanEnableBox.checked,
             kalman_pred: kalmanPredField.text,
             recoil_en: recoilEnableBox.checked,
@@ -1048,6 +1051,9 @@ ApplicationWindow {
         if (!neuralTremorField.activeFocus) neuralTremorField.text = backend.neuralTremorValue.toFixed(2)
         if (!kalmanPredField.activeFocus) kalmanPredField.text = backend.kalmanPredValue.toFixed(1)
         if (!triggerDelayField.activeFocus) triggerDelayField.text = backend.triggerDelayValue.toFixed(1)
+        if (!triggerHitboxEnterField.activeFocus) triggerHitboxEnterField.text = backend.triggerHitboxEnterScaleValue.toFixed(2)
+        if (!triggerHitboxExitField.activeFocus) triggerHitboxExitField.text = backend.triggerHitboxExitScaleValue.toFixed(2)
+        if (!triggerHoldGraceField.activeFocus) triggerHoldGraceField.text = backend.triggerHoldGraceMsValue.toFixed(1)
         if (!recoilStrengthField.activeFocus) recoilStrengthField.text = backend.recoilStrengthValue.toFixed(2)
         if (!recoilDelayField.activeFocus) recoilDelayField.text = backend.recoilDelayValue.toFixed(1)
         if (!stickIntField.activeFocus) stickIntField.text = backend.stickIntValue.toFixed(3)
@@ -1939,6 +1945,42 @@ ApplicationWindow {
 
                                         FormLabel { text: "间隔" }
                                         WheelValueField { id: triggerDelayField; Layout.preferredWidth: window.compactValueWidth; wheelStep: 5; wheelPrecision: 1; onEditingFinished: window.commitSettings() }
+                                        FormLabel { text: "扳机进入" }
+                                        WheelValueField {
+                                            id: triggerHitboxEnterField
+                                            Layout.preferredWidth: window.compactValueWidth
+                                            wheelStep: 0.05
+                                            wheelPrecision: 2
+                                            clampEnabled: true
+                                            minimumValue: 0.50
+                                            maximumValue: 2.50
+                                            placeholderText: "0.50~2.50"
+                                            onEditingFinished: window.commitSettings()
+                                        }
+                                        FormLabel { text: "扳机保持" }
+                                        WheelValueField {
+                                            id: triggerHitboxExitField
+                                            Layout.preferredWidth: window.compactValueWidth
+                                            wheelStep: 0.05
+                                            wheelPrecision: 2
+                                            clampEnabled: true
+                                            minimumValue: 0.50
+                                            maximumValue: 3.00
+                                            placeholderText: "0.50~3.00"
+                                            onEditingFinished: window.commitSettings()
+                                        }
+                                        FormLabel { text: "宽限ms" }
+                                        WheelValueField {
+                                            id: triggerHoldGraceField
+                                            Layout.preferredWidth: window.compactValueWidth
+                                            wheelStep: 5
+                                            wheelPrecision: 1
+                                            clampEnabled: true
+                                            minimumValue: 0
+                                            maximumValue: 250
+                                            placeholderText: "0~250"
+                                            onEditingFinished: window.commitSettings()
+                                        }
                                         FormLabel { text: "预测" }
                                         WheelValueField {
                                             id: kalmanPredField
