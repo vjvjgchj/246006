@@ -1,0 +1,17 @@
+{
+  "version": "2026.06.27.1",
+  "notes": "core updater landing test",
+  "files": [
+    {
+      "path": "runtime/TRT_ZeroCopy_Pipeline.exe",
+      "url": "https://github.com/vjvjgchj/246006/releases/download/v2026.06.27.1/TRT_ZeroCopy_Pipeline.exe",
+      "sha256": "28B871A6465F03AE9836D918E939B8D489ADFF9C5D1A88506F23447F5B0FFA60",
+      "size": 369152
+    }
+  ],
+  "preserve": [
+    "runtime/config.txt",
+    "runtime/logi_driver.dll",
+    "gui_settings.json"
+  ]
+}
