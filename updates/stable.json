@@ -1,17 +1,17 @@
 {
-  "version": "2026.06.27.1",
-  "notes": "core updater landing test",
-  "files": [
-    {
-      "path": "runtime/TRT_ZeroCopy_Pipeline.exe",
-      "url": "https://github.com/vjvjgchj/246006/releases/download/v2026.06.27.1/TRT_ZeroCopy_Pipeline.exe",
-      "sha256": "28B871A6465F03AE9836D918E939B8D489ADFF9C5D1A88506F23447F5B0FFA60",
-      "size": 369152
-    }
-  ],
+  "version": "2026.06.27.2",
+  "notes": "package updater and launcher release",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
     "gui_settings.json"
+  ],
+  "packages": [
+    {
+      "name": "core",
+      "url": "https://github.com/vjvjgchj/246006/releases/download/v2026.06.27.2/neko-core-v2026.06.27.2.zip",
+      "sha256": "BF1E806680A9AC2381EB19DEA079185415B47074F915726A0531A9D8F4FB7CA7",
+      "size": 202765
+    }
   ]
 }
