@@ -2,8 +2,8 @@
 
 This folder contains the static update manifest that can be hosted from:
 
-- GitHub Pages: `https://vjvjgchj.github.io/246006/updates/stable.json`
-- Raw GitHub: `https://raw.githubusercontent.com/vjvjgchj/246006/main/updates/stable.json`
+- Gitee raw: `https://gitee.com/w246006/246006/raw/main/updates/stable.json`
+- Raw GitHub fallback: `https://raw.githubusercontent.com/vjvjgchj/246006/main/updates/stable.json`
 
 ## Current Compatibility Rule
 
@@ -17,7 +17,7 @@ panel already contains package-capable `backend/update_manager.py`.
 
 ## Preferred Package Release Flow
 
-1. Push this repository content to `https://github.com/vjvjgchj/246006.git`.
+1. Push this repository content to `https://gitee.com/w246006/246006.git`.
 2. Build an update package zip with `tools\make_update_package.py`.
 3. Create a GitHub Release with a new tag such as `v2026.06.27.2`.
 4. Upload the zip package as a release asset.

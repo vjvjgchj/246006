@@ -9,7 +9,7 @@
   "packages": [
     {
       "name": "core",
-      "url": "https://github.com/vjvjgchj/246006/releases/download/v2026.06.27.2/neko-core-v2026.06.27.2.zip",
+      "url": "https://gitee.com/w246006/246006/raw/main/release_assets/neko-core-v2026.06.27.2.zip",
       "sha256": "BF1E806680A9AC2381EB19DEA079185415B47074F915726A0531A9D8F4FB7CA7",
       "size": 202765
     }

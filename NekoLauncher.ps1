@@ -1,5 +1,5 @@
 param(
-    [string]$ManifestUrl = "https://raw.githubusercontent.com/vjvjgchj/246006/main/updates/stable.json",
+    [string]$ManifestUrl = "https://gitee.com/w246006/246006/raw/main/updates/stable.json",
     [string]$InstallDir = "",
     [switch]$NoLaunch,
     [switch]$Force

@@ -8,7 +8,7 @@ By default, the launcher treats its own directory as the install/update target.
 Default manifest:
 
 ```text
-https://raw.githubusercontent.com/vjvjgchj/246006/main/updates/stable.json
+https://gitee.com/w246006/246006/raw/main/updates/stable.json
 ```
 
 The manifest must use the newer `packages[]` zip format. The launcher does not
