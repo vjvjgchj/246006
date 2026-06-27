@@ -221,7 +221,8 @@ else {
     }
 
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-    Set-Content -LiteralPath $versionFile -Value ([string]$manifest.version) -Encoding UTF8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($versionFile, [string]$manifest.version, $utf8NoBom)
     Write-Info "Installed version $($manifest.version)."
 }
 
