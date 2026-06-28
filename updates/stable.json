@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.28.2",
-  "notes": "web-only panel migration; retire QML chain",
+  "version": "2026.06.28.3",
+  "notes": "filter virtual adapter IPs for mobile web panel",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.28.2.zip",
-      "sha256": "015EFE4B73B2B261C0DB3044118B8F843A4C4FF489634319DC366BC6A13218F8",
-      "size": 57955
+      "url": "../release_assets/neko-core-v2026.06.28.3.zip",
+      "sha256": "6CB9B90D974B59986E2FF2C60117736A3AB47A1CAEB0E1AB75C76CEB56EB2120",
+      "size": 58130
     }
   ]
 }

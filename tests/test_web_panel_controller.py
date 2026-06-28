@@ -174,6 +174,14 @@ class WebPanelControllerTest(unittest.TestCase):
         finally:
             blocker.stop()
 
+    def test_lan_host_rejects_virtual_benchmark_and_link_local_addresses(self):
+        self.assertFalse(WebPanelController._is_usable_web_panel_lan_ip("198.18.0.1"))
+        self.assertFalse(WebPanelController._is_usable_web_panel_lan_ip("198.19.255.255"))
+        self.assertFalse(WebPanelController._is_usable_web_panel_lan_ip("169.254.1.2"))
+        self.assertFalse(WebPanelController._is_usable_web_panel_lan_ip("127.0.0.1"))
+        self.assertTrue(WebPanelController._is_usable_web_panel_lan_ip("10.153.161.128"))
+        self.assertTrue(WebPanelController._is_usable_web_panel_lan_ip("192.168.43.20"))
+
     def test_web_close_requests_controller_shutdown(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

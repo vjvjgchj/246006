@@ -4,6 +4,7 @@ import json
 import locale
 import math
 import os
+import ipaddress
 import re
 import socket
 import subprocess
@@ -1965,10 +1966,27 @@ class WebPanelController:
                     candidates.append(ip)
         except Exception:
             pass
-        for ip in candidates:
-            if ip and not ip.startswith("127."):
-                return ip
+        usable = [ip for ip in candidates if self._is_usable_web_panel_lan_ip(ip)]
+        private = [ip for ip in usable if ipaddress.ip_address(ip).is_private]
+        if private:
+            return private[0]
+        if usable:
+            return usable[0]
         return "127.0.0.1"
+
+    @staticmethod
+    def _is_usable_web_panel_lan_ip(value: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(str(value or "").strip())
+        except ValueError:
+            return False
+        if ip.version != 4:
+            return False
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            return False
+        if ip in ipaddress.ip_network("198.18.0.0/15"):
+            return False
+        return True
 
     def _is_local_tcp_port_open(self, port: int) -> bool:
         try:
