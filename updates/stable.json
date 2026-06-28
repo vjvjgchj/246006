@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.27.4",
-  "notes": "panel updater default manifest moved to Gitee",
+  "version": "2026.06.28.1",
+  "notes": "auto-detect YOLO model output layouts for v5/v8/v11/v13/v26",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -9,9 +9,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "https://gitee.com/w246006/246006/raw/main/release_assets/neko-core-v2026.06.27.4.zip",
-      "sha256": "29E60F33868EC9824794CAB2457A9A5CC379EA4DB04101D404D6244C0E9131CC",
-      "size": 207142
+      "url": "https://gitee.com/w246006/246006/raw/main/release_assets/neko-core-v2026.06.28.1.zip",
+      "sha256": "A3C05AC2830FF6168B722D5E8A68D6ED1D658173FB8A1A5A8D087F009E690824",
+      "size": 233167
     }
   ]
 }
