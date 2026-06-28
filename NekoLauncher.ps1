@@ -146,6 +146,53 @@ function Expand-SafeZip([string]$ZipPath, [string]$Destination, [string[]]$Prese
     }
 }
 
+function Assert-DeletableRelativePath([string]$RelativePath, [string[]]$PreservePaths) {
+    $relative = Normalize-RelativePath $RelativePath
+    $relativeLower = $relative.ToLowerInvariant()
+    foreach ($item in $PreservePaths) {
+        if ([string]::IsNullOrWhiteSpace($item)) {
+            continue
+        }
+        $blocked = (Normalize-RelativePath $item).ToLowerInvariant()
+        if ((Test-SameOrChild $relativeLower $blocked) -or (Test-SameOrChild $blocked $relativeLower)) {
+            throw "Refusing to delete protected path: $relative"
+        }
+    }
+    return $relative
+}
+
+function Remove-ManifestPaths([string]$InstallRoot, [object]$Manifest, [string[]]$PreservePaths) {
+    $deletePaths = @()
+    if ($Manifest.delete) {
+        foreach ($item in $Manifest.delete) {
+            $deletePaths += [string]$item
+        }
+    }
+    if ($Manifest.remove) {
+        foreach ($item in $Manifest.remove) {
+            $deletePaths += [string]$item
+        }
+    }
+    if ($deletePaths.Count -lt 1) {
+        return
+    }
+
+    $installFull = ConvertTo-FullPath $InstallRoot
+    foreach ($item in $deletePaths) {
+        if ([string]::IsNullOrWhiteSpace($item)) {
+            continue
+        }
+        $relative = Assert-DeletableRelativePath $item $PreservePaths
+        $target = Join-Path $installFull ($relative -replace "/", [System.IO.Path]::DirectorySeparatorChar)
+        Assert-UnderPath $target $installFull
+        if (-not (Test-Path -LiteralPath $target)) {
+            continue
+        }
+        Write-Info "Removing retired path: $relative"
+        Remove-Item -LiteralPath $target -Recurse -Force
+    }
+}
+
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     throw "PowerShell 5.1 or newer is required."
 }
@@ -220,6 +267,8 @@ else {
         Expand-SafeZip $zipPath $InstallDir $preserve
     }
 
+    Remove-ManifestPaths $InstallDir $manifest $preserve
+
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($versionFile, [string]$manifest.version, $utf8NoBom)
@@ -227,9 +276,9 @@ else {
 }
 
 if (-not $NoLaunch) {
-    $entry = Join-Path $InstallDir "6_run_qml_panel.vbs"
+    $entry = Join-Path $InstallDir "6_run_web_panel.vbs"
     if (Test-Path -LiteralPath $entry -PathType Leaf) {
-        Write-Info "Launching panel..."
+        Write-Info "Launching web panel..."
         Start-Process -FilePath "wscript.exe" -ArgumentList @("`"$entry`"") -WorkingDirectory $InstallDir
     }
     else {

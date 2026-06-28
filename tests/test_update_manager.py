@@ -130,6 +130,137 @@ class UpdateManagerTest(unittest.TestCase):
             self.assertEqual((backup_root / "runtime" / "TRT_ZeroCopy_Pipeline.exe").read_bytes(), b"old exe")
             self.assertEqual((backup_root / "backend" / "qml_bridge.py").read_text(encoding="utf-8"), "old bridge")
 
+    def test_applies_delete_manifest_entries_with_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            release = Path(tmp) / "release"
+            (root / "runtime").mkdir(parents=True)
+            (root / "backend").mkdir(parents=True)
+            (root / "qml").mkdir(parents=True)
+            release.mkdir()
+
+            (root / "qml" / "Main.qml").write_text("legacy qml", encoding="utf-8")
+            (root / "backend" / "qml_bridge.py").write_text("legacy bridge", encoding="utf-8")
+            (root / "6_run_qml_panel.vbs").write_text("legacy launcher", encoding="utf-8")
+            (root / "runtime" / "logi_driver.dll").write_bytes(b"driver must stay")
+
+            package = release / "web-only.zip"
+            with zipfile.ZipFile(package, "w") as archive:
+                archive.writestr("6_run_web_panel.vbs", "web launcher")
+
+            manifest = release / "stable.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "web-only.1",
+                        "packages": [
+                            {
+                                "name": "web-only",
+                                "url": package.as_uri(),
+                                "sha256": sha256_file(package),
+                            }
+                        ],
+                        "delete": [
+                            "qml",
+                            "backend/qml_bridge.py",
+                            "6_run_qml_panel.vbs",
+                            "run_panel_hidden.pyw",
+                            "gui_qml_trial.py",
+                        ],
+                        "preserve": ["runtime/config.txt", "runtime/logi_driver.dll", "gui_settings.json"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            backup_root = apply_manifest_update(root, manifest.as_uri())
+
+            self.assertFalse((root / "qml").exists())
+            self.assertFalse((root / "backend" / "qml_bridge.py").exists())
+            self.assertFalse((root / "6_run_qml_panel.vbs").exists())
+            self.assertEqual((root / "6_run_web_panel.vbs").read_text(encoding="utf-8"), "web launcher")
+            self.assertEqual((root / "runtime" / "logi_driver.dll").read_bytes(), b"driver must stay")
+            self.assertEqual((backup_root / "qml" / "Main.qml").read_text(encoding="utf-8"), "legacy qml")
+            self.assertEqual((backup_root / "backend" / "qml_bridge.py").read_text(encoding="utf-8"), "legacy bridge")
+
+    def test_refuses_delete_of_protected_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            release = Path(tmp) / "release"
+            (root / "runtime").mkdir(parents=True)
+            release.mkdir()
+            (root / "runtime" / "logi_driver.dll").write_bytes(b"driver must stay")
+
+            package = release / "web-only.zip"
+            with zipfile.ZipFile(package, "w") as archive:
+                archive.writestr("6_run_web_panel.vbs", "web launcher")
+
+            manifest = release / "stable.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "web-only.2",
+                        "packages": [
+                            {
+                                "name": "web-only",
+                                "url": package.as_uri(),
+                                "sha256": sha256_file(package),
+                            }
+                        ],
+                        "delete": ["runtime/logi_driver.dll"],
+                        "preserve": ["runtime/logi_driver.dll"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(UpdateError):
+                apply_manifest_update(root, manifest.as_uri())
+            self.assertEqual((root / "runtime" / "logi_driver.dll").read_bytes(), b"driver must stay")
+
+    def test_rolls_back_deleted_paths_when_validation_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            release = Path(tmp) / "release"
+            (root / "qml").mkdir(parents=True)
+            release.mkdir()
+            (root / "qml" / "Main.qml").write_text("legacy qml", encoding="utf-8")
+
+            package = release / "web-only.zip"
+            with zipfile.ZipFile(package, "w") as archive:
+                archive.writestr("6_run_web_panel.vbs", "web launcher")
+
+            manifest = release / "stable.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "web-only.rollback",
+                        "packages": [
+                            {
+                                "name": "web-only",
+                                "url": package.as_uri(),
+                                "sha256": sha256_file(package),
+                            }
+                        ],
+                        "delete": ["qml"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fail_validation():
+                raise RuntimeError("validation failed")
+
+            with self.assertRaises(RuntimeError):
+                manifest_obj = load_manifest(manifest.as_uri())
+                from backend.update_manager import apply_staged_update, stage_update
+
+                stage = stage_update(root, manifest.as_uri(), manifest_obj)
+                apply_staged_update(root, manifest_obj, stage, validate=fail_validation)
+
+            self.assertEqual((root / "qml" / "Main.qml").read_text(encoding="utf-8"), "legacy qml")
+            self.assertFalse((root / "6_run_web_panel.vbs").exists())
+
     def test_refuses_package_with_protected_member(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"

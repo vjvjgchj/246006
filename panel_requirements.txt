@@ -1,0 +1,8 @@
+requests
+pywin32
+discord-interactions
+qrcode[pil]
+Pillow
+onnx
+pynput
+pyserial

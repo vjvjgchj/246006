@@ -1,16 +1,18 @@
-﻿import ast
+import ast
 import ctypes
 import json
 import locale
 import math
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
 import warnings
+import webbrowser
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -19,19 +21,12 @@ try:
 except ImportError:
     winreg = None
 
-from PySide6.QtCore import (
-    QAbstractListModel,
-    QModelIndex,
-    QObject,
-    Property,
-    QProcess,
-    QUrl,
-    QTimer,
-    Qt,
-    Signal,
-    Slot,
+from backend.mobile_control_server import (
+    MOBILE_CONTROL_FIELDS,
+    MobileControlError,
+    MobileControlServer,
+    validate_config_patch,
 )
-
 from backend.update_manager import (
     UpdateError,
     apply_staged_update,
@@ -58,50 +53,20 @@ class MEMORYSTATUSEX(ctypes.Structure):
     ]
 
 
-class ClassSelectionModel(QAbstractListModel):
-    ClassIdRole = Qt.UserRole + 1
-    ClassNameRole = Qt.UserRole + 2
-    CheckedRole = Qt.UserRole + 3
-    DisplayRole = Qt.UserRole + 4
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
+class ClassSelectionState:
+    def __init__(self):
         self._items = []
 
-    def rowCount(self, parent=QModelIndex()):
-        if parent.isValid():
-            return 0
+    def row_count(self):
         return len(self._items)
 
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or not (0 <= index.row() < len(self._items)):
-            return None
-        item = self._items[index.row()]
-        if role == self.ClassIdRole:
-            return item["classId"]
-        if role == self.ClassNameRole:
-            return item["className"]
-        if role == self.CheckedRole:
-            return item["checked"]
-        if role in (Qt.DisplayRole, self.DisplayRole):
-            return item["display"]
-        return None
-
-    def roleNames(self):
-        return {
-            self.ClassIdRole: b"classId",
-            self.ClassNameRole: b"className",
-            self.CheckedRole: b"checked",
-            self.DisplayRole: b"display",
-        }
-
     def set_items(self, options, selected_ids):
-        selected_set = set(str(x) for x in (selected_ids or []))
+        selected = {str(item) for item in (selected_ids or [])}
         items = []
         if not options:
             options = ["0 - 默认类别"]
         for index, option in enumerate(options):
-            class_id, _, class_name = option.partition(" - ")
+            class_id, _, class_name = str(option).partition(" - ")
             class_id = class_id.strip() or str(index)
             class_name = class_name.strip() or f"class_{class_id}"
             items.append(
@@ -109,12 +74,10 @@ class ClassSelectionModel(QAbstractListModel):
                     "classId": class_id,
                     "className": class_name,
                     "display": f"{class_id} - {class_name}",
-                    "checked": class_id in selected_set if selected_set else index == 0,
+                    "checked": class_id in selected if selected else index == 0,
                 }
             )
-        self.beginResetModel()
         self._items = items
-        self.endResetModel()
 
     def selected_ids(self):
         return [item["classId"] for item in self._items if item["checked"]]
@@ -123,156 +86,32 @@ class ClassSelectionModel(QAbstractListModel):
         selected = {part.strip() for part in str(csv_text).split(",") if part.strip()}
         if not self._items:
             return
-        for row, item in enumerate(self._items):
-            checked = item["classId"] in selected
-            if item["checked"] == checked:
-                continue
-            item["checked"] = checked
-            model_index = self.index(row, 0)
-            self.dataChanged.emit(model_index, model_index, [self.CheckedRole])
-
-    @Slot(int, bool)
-    def setChecked(self, row: int, checked: bool):
-        if row < 0 or row >= len(self._items):
-            return
-        item = self._items[row]
-        if item["checked"] == checked:
-            return
-        item["checked"] = checked
-        model_index = self.index(row, 0)
-        self.dataChanged.emit(model_index, model_index, [self.CheckedRole])
+        for item in self._items:
+            item["checked"] = item["classId"] in selected
 
 
-class LogListModel(QAbstractListModel):
-    TextRole = Qt.UserRole + 1
-    LevelRole = Qt.UserRole + 2
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._items = []
-
-    def rowCount(self, parent=QModelIndex()):
-        if parent.isValid():
-            return 0
-        return len(self._items)
-
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or not (0 <= index.row() < len(self._items)):
-            return None
-        item = self._items[index.row()]
-        if role in (Qt.DisplayRole, self.TextRole):
-            return item["text"]
-        if role == self.LevelRole:
-            return item["level"]
-        return None
-
-    def roleNames(self):
-        return {
-            self.TextRole: b"text",
-            self.LevelRole: b"level",
-        }
-
-    def append_line(self, text: str, level: str):
-        row = len(self._items)
-        self.beginInsertRows(QModelIndex(), row, row)
-        self._items.append({"text": text, "level": level})
-        self.endInsertRows()
-        if len(self._items) > 400:
-            extra = len(self._items) - 400
-            self.beginRemoveRows(QModelIndex(), 0, extra - 1)
-            del self._items[:extra]
-            self.endRemoveRows()
-
-
-class QmlBridge(QObject):
-    stateChanged = Signal()
-    logTextChanged = Signal()
-    conversionRunningChanged = Signal()
-    pipelineRunningChanged = Signal()
-    pipelineOutputLine = Signal(str)
-    pipelineFinishedAsync = Signal(int, int)
-    modelParsed = Signal(list, str)
-    keyProgress = Signal(str, str)
-    keyFinished = Signal(str, str, str, str)
-    systemMetricsSampled = Signal(object)
-    licenseStatusSampled = Signal(object)
-    updateStatusSampled = Signal(object)
-
+class WebPanelController:
     SAVE_FILE = "gui_settings.json"
     DEFAULT_UPDATE_MANIFEST_URL = "https://gitee.com/w246006/246006/raw/main/updates/stable.json"
     KALMAN_PRED_DEFAULT = 1.0
     KALMAN_PRED_MIN = 0.0
     KALMAN_PRED_MAX = 4.0
-    THEME_PRESETS = {
-        "极夜青辉": {
-            "accent": "#5EF2FF",
-            "accent2": "#00FFC8",
-            "surface": "#0B1730",
-            "surface_alt": "#071120",
-            "text": "#F1FBFF",
-            "muted": "#9DCBDE",
-            "hero_start": "#10254E",
-            "hero_end": "#0A6D86",
-            "sidebar": "#0B1428",
-        },
-        "紫电星云": {
-            "accent": "#B67BFF",
-            "accent2": "#36E6FF",
-            "surface": "#16112B",
-            "surface_alt": "#090714",
-            "text": "#F7F3FF",
-            "muted": "#B8B2D8",
-            "hero_start": "#2B1451",
-            "hero_end": "#163A73",
-            "sidebar": "#120D26",
-        },
-        "熔岩赤曜": {
-            "accent": "#FF8A5B",
-            "accent2": "#FFD65C",
-            "surface": "#22110F",
-            "surface_alt": "#120807",
-            "text": "#FFF5EE",
-            "muted": "#D8B9A7",
-            "hero_start": "#4B1D18",
-            "hero_end": "#85521A",
-            "sidebar": "#190E0B",
-        },
-        "自定义主题": {
-            "accent": "#5EF2FF",
-            "accent2": "#00FFC8",
-            "surface": "#0B1730",
-            "surface_alt": "#071120",
-            "text": "#F1FBFF",
-            "muted": "#9DCBDE",
-            "hero_start": "#10254E",
-            "hero_end": "#0A6D86",
-            "sidebar": "#0B1428",
-        },
-    }
 
-    def __init__(self, project_root: str, parent=None):
-        super().__init__(parent)
-        self.project_root = project_root
+    def __init__(self, project_root: str, start_background_tasks: bool = True):
+        self.project_root = os.path.abspath(project_root)
         self.builder_root = os.path.join(self.project_root, "engine_builder")
         self.models_root = os.path.join(self.project_root, "models")
         self.runtime_root = os.path.join(self.project_root, "runtime")
         self.runtime_config_path = os.path.join(self.runtime_root, "config.txt")
         self.runtime_exe_path = os.path.join(self.runtime_root, "TRT_ZeroCopy_Pipeline.exe")
-        self.modelParsed.connect(self._apply_parsed_model_info)
-        self.keyProgress.connect(self._update_recording_display)
-        self.keyFinished.connect(self._finish_recording)
-        self.pipelineOutputLine.connect(self._handle_pipeline_output_line)
-        self.pipelineFinishedAsync.connect(self._pipeline_finished)
-        self.systemMetricsSampled.connect(self._apply_system_metrics)
-        self.licenseStatusSampled.connect(self._apply_license_status)
-        self.updateStatusSampled.connect(self._apply_update_status)
-        self.class_model = ClassSelectionModel(self)
-        self.log_model = LogListModel(self)
+
+        self.class_model = ClassSelectionState()
         self._log_lines = []
         self.conversion_process = None
         self.pipeline_process = None
         self._pipeline_stop_requested = False
-        self.current_record_target = None
+        self._pending_engine_output_path = ""
+
         self.model_path = ""
         self.engine_path = ""
         self.imgsz = 416
@@ -315,8 +154,6 @@ class QmlBridge(QObject):
         self.aim_keys_display = "右键 (VK:2)"
         self.trigger_keys_display = "左键 (VK:1)"
         self.card_opacity = 88
-        self.theme_name = "极夜青辉"
-        self.custom_theme_color = "#5EF2FF"
         self.background_image_path = ""
         self.background_video_path = ""
         self.background_video_url = ""
@@ -343,6 +180,7 @@ class QmlBridge(QObject):
         self.license_status_detail = "正在读取核心授权状态"
         self.license_seconds_left = -1
         self.license_expiry_unix = 0
+
         self.update_manifest_url = os.environ.get("NEKO_UPDATE_MANIFEST_URL", self.DEFAULT_UPDATE_MANIFEST_URL)
         self.update_current_version = self._read_update_current_version()
         self.update_latest_version = "--"
@@ -352,6 +190,7 @@ class QmlBridge(QObject):
         self._update_pending_manifest = None
         self._update_lock = threading.Lock()
         self._update_in_flight = False
+
         self.last_true_fps = None
         self.last_infer_latency_ms = None
         self._cpu_prev_idle = None
@@ -373,52 +212,61 @@ class QmlBridge(QObject):
             r"(?:Engine 模型已保存至|Engine build completed|Texture preprocess plugin engine built):\s*(.+)",
             re.IGNORECASE,
         )
-        self._pending_engine_output_path = ""
-        self.metrics_timer = QTimer(self)
-        self.metrics_timer.setInterval(1500)
-        self.metrics_timer.timeout.connect(self._update_system_metrics)
-        self._prime_cpu_usage()
-        self._update_system_metrics()
-        self.metrics_timer.start()
-        self.license_status_timer = QTimer(self)
-        self.license_status_timer.setInterval(60000)
-        self.license_status_timer.timeout.connect(self.refreshLicenseStatus)
-        self.license_status_timer.start()
+
+        self.web_panel_server = None
+        self.web_panel_pin = ""
+        self.web_panel_url = ""
+        self.web_panel_local_url = ""
+        self.web_panel_status = "Web 面板: 未启动"
+        self.web_panel_port = 24600
+        self._web_panel_snapshot_lock = threading.RLock()
+        self._web_panel_snapshot = {}
+        self._web_panel_file_cache_lock = threading.Lock()
+        self._web_panel_file_cache = {"modelCandidates": [], "engineCandidates": []}
+        self._web_panel_file_cache_at = 0.0
+        self._web_panel_file_cache_ttl = 30.0
+        self._web_panel_file_refreshing = False
+        self._web_panel_non_hot_fields = {field.key for field in MOBILE_CONTROL_FIELDS if not field.hot}
+        self._web_clients_lock = threading.Lock()
+        self._web_clients = {}
+        self._web_shutdown_generation = 0
+        self._web_shutdown_delay_seconds = 1.2
+        self._shutdown_requested = False
+        self._stop_event = threading.Event()
+        self._background_threads = []
+
         self.load_settings()
-        self.refreshEsp32SerialPorts()
-        self.refreshLicenseStatus()
         self._update_status_labels()
+        self._refresh_web_panel_snapshot()
+
+        if start_background_tasks:
+            self._start_background_tasks()
+
+    def _start_background_tasks(self):
+        self._prime_cpu_usage()
+        metrics_thread = threading.Thread(target=self._metrics_loop, name="NekoWebMetrics", daemon=True)
+        metrics_thread.start()
+        self._background_threads.append(metrics_thread)
+        threading.Thread(target=self.refreshEsp32SerialPorts, name="NekoWebSerialScan", daemon=True).start()
+        self.refreshLicenseStatus()
+
+    def _metrics_loop(self):
+        self._update_system_metrics()
+        while not self._stop_event.wait(1.5):
+            self._update_system_metrics()
 
     def _emit_state(self):
-        self.stateChanged.emit()
-
-    def _set_esp32_scan_running(self, running: bool):
-        self.esp32_scan_running = bool(running)
-        self._emit_state()
-
-    def _set_esp32_scan_status(self, text: str):
-        self.esp32_scan_status = str(text)
-        self._append_log(text)
-        self._emit_state()
+        self._refresh_web_panel_snapshot()
 
     def _append_log(self, message: str):
-        line = message.rstrip()
+        line = str(message).rstrip()
         if not line:
             return
         self._extract_runtime_metrics(line)
         self._extract_auth_status(line)
-        level = "info"
-        upper_line = line.upper()
-        if "[ERROR]" in upper_line:
-            level = "error"
-        elif "[WARN]" in upper_line:
-            level = "warn"
-        elif "[SUCCESS]" in upper_line:
-            level = "success"
-        self.log_model.append_line(line, level)
         self._log_lines.append(line)
         self._log_lines = self._log_lines[-400:]
-        self.logTextChanged.emit()
+        self._refresh_web_panel_snapshot()
 
     def _decode_process_output(self, raw_bytes: bytes) -> str:
         if not raw_bytes:
@@ -434,17 +282,394 @@ class QmlBridge(QObject):
                 return raw_bytes.decode(encoding)
             except UnicodeDecodeError:
                 continue
-            except LookupError:
-                continue
         return raw_bytes.decode("utf-8", errors="replace")
-
-    def _is_pipeline_running(self) -> bool:
-        return bool(self.pipeline_process and self.pipeline_process.poll() is None)
 
     def _hidden_process_flags(self) -> int:
         if os.name != "nt":
             return 0
         return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+    def _is_pipeline_running(self) -> bool:
+        if not self.pipeline_process:
+            return False
+        poll = getattr(self.pipeline_process, "poll", None)
+        if callable(poll):
+            return poll() is None
+        return True
+
+    def _is_conversion_running(self) -> bool:
+        if not self.conversion_process:
+            return False
+        poll = getattr(self.conversion_process, "poll", None)
+        return callable(poll) and poll() is None
+
+    def _refresh_web_panel_snapshot(self):
+        snapshot = self._make_web_panel_snapshot()
+        with self._web_panel_snapshot_lock:
+            self._web_panel_snapshot = snapshot
+
+    def _web_panel_state_provider(self):
+        with self._web_panel_snapshot_lock:
+            return dict(self._web_panel_snapshot)
+
+    def _make_web_panel_snapshot(self):
+        return {
+            "runtime": {
+                "isPipelineRunning": self._is_pipeline_running(),
+                "statusModeText": self.status_mode_text,
+                "statusModelText": self.status_model_text,
+                "statusEngineText": self.status_engine_text,
+                "fpsMetricText": self.fps_metric_text,
+                "latencyMetricText": self.latency_metric_text,
+                "licenseBadgeText": self.license_badge_text,
+                "licenseExpiryCompactText": self.license_expiry_compact_text,
+                "licenseRemainingText": self.license_remaining_text,
+                "backgroundStatusText": self._get_background_status_text(),
+            },
+            "update": {
+                "statusText": self.update_status_text,
+                "currentVersion": self.update_current_version,
+                "latestVersion": self.update_latest_version,
+                "available": self.update_available,
+                "running": self.update_running,
+                "manifestUrl": self.update_manifest_url,
+            },
+            "metrics": {
+                "cpuText": self.cpu_metric_text,
+                "gpuText": self.gpu_metric_text,
+                "memoryText": self.memory_metric_text,
+                "cpuUsageValue": self.cpu_usage_value,
+                "gpuUsageValue": self.gpu_usage_value,
+                "memoryUsageValue": self.memory_usage_value,
+            },
+            "model": {
+                "modelInfoText": self.model_info_text,
+                "availableClassesText": self.available_classes_text,
+                "aimKeysDisplay": self.aim_keys_display,
+                "triggerKeysDisplay": self.trigger_keys_display,
+            },
+            "esp32": {
+                "scanStatus": self.esp32_scan_status,
+                "serialPortsText": self.esp32_serial_ports_text,
+                "scanRunning": self.esp32_scan_running,
+            },
+            "web": {
+                "status": self.web_panel_status,
+                "url": self.web_panel_url,
+                "localUrl": self.web_panel_local_url,
+                "pin": self.web_panel_pin,
+            },
+            "config": {
+                "card_opacity": self.card_opacity,
+                "background_image_path": self._to_project_config_path(self.background_image_path),
+                "model_path": self._to_project_config_path(self.model_path),
+                "engine_path": self._to_project_config_path(self.engine_path),
+                "imgsz": self.imgsz,
+                "roi": self.roi,
+                "pipeline_mode": self.pipeline_mode,
+                "motion_mode": self.motion_mode,
+                "lghub_enabled": self.lghub_enabled,
+                "esp32_enabled": self.esp32_enabled,
+                "esp32_port": self.esp32_port,
+                "esp32_baud": self.esp32_baud,
+                "aim_keys": self.aim_keys,
+                "trigger_keys": self.trigger_keys,
+                "conf": self.conf,
+                "nms": self.nms,
+                "fps_limit": self.fps_limit,
+                "selected_classes_text": self.selected_classes_text,
+                "pid_p": self.pid_p,
+                "pid_i": self.pid_i,
+                "pid_d": self.pid_d,
+                "y_offset": self.y_offset,
+                "neural_curvature": self.neural_curvature,
+                "neural_tremor": self.neural_tremor,
+                "trigger_mode": self.trigger_mode,
+                "trigger_delay": self.trigger_delay,
+                "trigger_hitbox_enter_scale": self.trigger_hitbox_enter_scale,
+                "trigger_hitbox_exit_scale": self.trigger_hitbox_exit_scale,
+                "trigger_hold_grace_ms": self.trigger_hold_grace_ms,
+                "kalman_en": self.kalman_en,
+                "kalman_pred": self.kalman_pred,
+                "stick_enable": self.stick_enable,
+                "stick_int": self.stick_int,
+                "stick_rad": self.stick_rad,
+                "recoil_en": self.recoil_en,
+                "trigger_recoil_en": self.trigger_recoil_en,
+                "recoil_strength": self.recoil_strength,
+                "recoil_delay": self.recoil_delay,
+            },
+            "files": self._web_panel_file_candidates(),
+            "logs": list(self._log_lines[-160:]),
+        }
+
+    def _web_panel_file_candidates(self):
+        now = time.monotonic()
+        with self._web_panel_file_cache_lock:
+            cached = {
+                "modelCandidates": list(self._web_panel_file_cache.get("modelCandidates", [])),
+                "engineCandidates": list(self._web_panel_file_cache.get("engineCandidates", [])),
+            }
+            fresh = now - self._web_panel_file_cache_at < self._web_panel_file_cache_ttl
+            refreshing = self._web_panel_file_refreshing
+        if fresh:
+            return cached
+        if not refreshing:
+            self._start_web_panel_file_refresh()
+        return cached
+
+    def _start_web_panel_file_refresh(self):
+        with self._web_panel_file_cache_lock:
+            if self._web_panel_file_refreshing:
+                return
+            self._web_panel_file_refreshing = True
+
+        def worker():
+            try:
+                model_candidates, engine_candidates = self._scan_web_panel_file_candidates()
+                files = {"modelCandidates": model_candidates, "engineCandidates": engine_candidates}
+                with self._web_panel_file_cache_lock:
+                    self._web_panel_file_cache = files
+                    self._web_panel_file_cache_at = time.monotonic()
+                    self._web_panel_file_refreshing = False
+                with self._web_panel_snapshot_lock:
+                    snapshot = dict(self._web_panel_snapshot)
+                    snapshot["files"] = {
+                        "modelCandidates": list(model_candidates),
+                        "engineCandidates": list(engine_candidates),
+                    }
+                    self._web_panel_snapshot = snapshot
+            except Exception:
+                with self._web_panel_file_cache_lock:
+                    self._web_panel_file_cache_at = time.monotonic()
+                    self._web_panel_file_refreshing = False
+
+        threading.Thread(target=worker, name="NekoWebFileScan", daemon=True).start()
+
+    def _scan_web_panel_file_candidates(self):
+        model_candidates = []
+        engine_candidates = []
+        root = Path(self.models_root)
+        if not root.exists():
+            return model_candidates, engine_candidates
+        try:
+            paths = sorted(
+                (path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in (".onnx", ".engine")),
+                key=lambda path: str(path).lower(),
+            )
+        except Exception:
+            paths = []
+        for path in paths[:240]:
+            try:
+                value = os.path.relpath(str(path), self.project_root).replace("/", "\\")
+            except ValueError:
+                value = str(path)
+            item = {"name": path.name, "path": value}
+            if path.suffix.lower() == ".onnx":
+                model_candidates.append(item)
+            elif path.suffix.lower() == ".engine":
+                engine_candidates.append(item)
+        return model_candidates, engine_candidates
+
+    def update_handler(self, patch):
+        current_config = self._web_panel_state_provider().get("config", {})
+        clean = validate_config_patch(dict(patch or {}))
+        locked = sorted(
+            key
+            for key in set(clean) & self._web_panel_non_hot_fields
+            if current_config.get(key) != clean.get(key)
+        )
+        if locked and self._is_pipeline_running():
+            raise MobileControlError(
+                409,
+                "PIPELINE_RUNNING",
+                "Stop pipeline before changing non-hot settings",
+                {"fields": locked},
+            )
+        self._update_from_map(clean)
+        if self._is_pipeline_running() and not self._write_pipeline_config():
+            raise MobileControlError(409, "CONFIG_WRITE_FAILED", "Failed to write runtime config")
+        self._emit_state()
+        return self._web_panel_state_provider()
+
+    def action_handler(self, action, payload=None):
+        action = str(action or "").strip()
+        raw_payload = dict(payload or {})
+        config_actions = {
+            "start",
+            "pipeline.start",
+            "settings.save",
+            "model.convert",
+            "model.netron",
+            "esp32.auto",
+            "esp32.probe",
+        }
+        action_data = validate_config_patch(raw_payload) if action in config_actions and raw_payload else {}
+        if action in ("start", "pipeline.start"):
+            self.startPipeline(action_data)
+        elif action in ("stop", "pipeline.stop"):
+            self.stopPipeline()
+        elif action == "settings.save":
+            self.saveSettings(action_data)
+        elif action == "model.convert":
+            self.startConversion(action_data)
+        elif action == "model.netron":
+            if action_data:
+                self._update_from_map(action_data)
+            self.openNetron()
+        elif action == "update.check":
+            self.checkForUpdates()
+        elif action == "update.apply":
+            self.applyAvailableUpdate()
+        elif action == "background.clear":
+            self.clearBackgroundImage()
+        elif action == "file.browse_model":
+            self.browseLocalFile("model")
+        elif action == "file.browse_engine":
+            self.browseLocalFile("engine")
+        elif action == "file.browse_background":
+            self.browseLocalFile("background")
+        elif action == "esp32.refresh":
+            self.refreshEsp32SerialPorts()
+        elif action == "esp32.auto":
+            if action_data:
+                self._update_from_map(action_data)
+            self.autoDetectEsp32Serial()
+        elif action == "esp32.probe":
+            if action_data:
+                self._update_from_map(action_data)
+            self.probeEsp32Connection()
+        elif action == "keys.record_aim":
+            self.recordKeys("aim", raw_payload)
+        elif action == "keys.record_trigger":
+            self.recordKeys("trigger", raw_payload)
+        elif action == "keys.reset_aim":
+            self.resetKeys("aim")
+        elif action == "keys.reset_trigger":
+            self.resetKeys("trigger")
+        elif action in ("web.client_open", "web.heartbeat"):
+            self._mark_web_client(raw_payload)
+        elif action == "web.close":
+            self._close_web_client(raw_payload)
+        else:
+            raise MobileControlError(422, "VALIDATION_ERROR", "Unknown runtime action")
+        self._emit_state()
+        return self._web_panel_state_provider()
+
+    def _web_client_id(self, payload) -> str:
+        text = str(dict(payload or {}).get("client_id", "")).strip()
+        return text[:96] if text else "default"
+
+    def _mark_web_client(self, payload):
+        client_id = self._web_client_id(payload)
+        with self._web_clients_lock:
+            self._web_shutdown_generation += 1
+            self._web_clients[client_id] = time.monotonic()
+
+    def _close_web_client(self, payload):
+        client_id = self._web_client_id(payload)
+        with self._web_clients_lock:
+            self._web_clients.pop(client_id, None)
+            self._web_shutdown_generation += 1
+            generation = self._web_shutdown_generation
+            has_clients = bool(self._web_clients)
+        if has_clients:
+            return
+        threading.Thread(
+            target=self._request_shutdown_when_no_web_clients,
+            args=(generation,),
+            name="NekoWebAutoShutdown",
+            daemon=True,
+        ).start()
+
+    def _request_shutdown_when_no_web_clients(self, generation: int):
+        delay = max(0.0, float(self._web_shutdown_delay_seconds))
+        if delay > 0:
+            time.sleep(delay)
+        with self._web_clients_lock:
+            if generation != self._web_shutdown_generation or self._web_clients:
+                return
+            self._shutdown_requested = True
+        self._append_log("[INFO] Web 页面已关闭，正在停止推理核心并退出 Web 控制器。")
+        self._stop_event.set()
+
+    def shutdown_requested(self) -> bool:
+        return bool(self._shutdown_requested or self._stop_event.is_set())
+
+    def _choose_local_file(self, purpose: str) -> str:
+        purpose = str(purpose or "").strip().lower()
+        options = {
+            "model": {
+                "title": "选择 ONNX 模型",
+                "initialdir": self.models_root,
+                "filetypes": [("ONNX 模型", "*.onnx"), ("所有文件", "*.*")],
+            },
+            "engine": {
+                "title": "选择 TensorRT Engine",
+                "initialdir": self.models_root,
+                "filetypes": [("TensorRT Engine", "*.engine"), ("所有文件", "*.*")],
+            },
+            "background": {
+                "title": "选择背景图片",
+                "initialdir": self.project_root,
+                "filetypes": [
+                    ("图片文件", "*.png;*.jpg;*.jpeg;*.bmp;*.webp"),
+                    ("所有文件", "*.*"),
+                ],
+            },
+        }
+        if purpose not in options:
+            raise MobileControlError(422, "VALIDATION_ERROR", "Unknown file browse target")
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception as exc:
+            raise MobileControlError(500, "FILE_DIALOG_UNAVAILABLE", f"无法打开本机文件选择框: {exc}")
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            selected = filedialog.askopenfilename(parent=root, **options[purpose])
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+        return str(selected or "").strip()
+
+    def browseLocalFile(self, purpose: str):
+        purpose = str(purpose or "").strip().lower()
+        if purpose in ("model", "engine") and self._is_pipeline_running():
+            raise MobileControlError(
+                409,
+                "PIPELINE_RUNNING",
+                "Stop pipeline before changing non-hot settings",
+                {"fields": ["model_path" if purpose == "model" else "engine_path"]},
+            )
+        selected = self._choose_local_file(purpose)
+        if not selected:
+            self._append_log("[INFO] 已取消本机文件选择。")
+            return
+        if purpose == "model":
+            self._update_from_map({"model_path": selected})
+        elif purpose == "engine":
+            self._update_from_map({"engine_path": selected})
+        elif purpose == "background":
+            self._update_from_map(
+                {
+                    "background_image_path": selected,
+                    "background_video_path": "",
+                    "background_video_url": "",
+                    "active_background_mode": "image",
+                }
+            )
+            self._append_log(f">> 已选择背景图片: {self.background_image_path}")
+        else:
+            raise MobileControlError(422, "VALIDATION_ERROR", "Unknown file browse target")
 
     def _is_process_elevated(self) -> bool:
         if os.name != "nt":
@@ -471,10 +696,6 @@ class QmlBridge(QObject):
         combined_output = f"{result.stdout}\n{result.stderr}".upper()
         return "LGHUBDEVICE\\VID_046D&PID_C231" in combined_output
 
-    def _handle_pipeline_output_line(self, line: str):
-        if line.strip():
-            self._append_log(line)
-
     def _pump_pipeline_output(self, process):
         try:
             if process.stdout:
@@ -482,51 +703,12 @@ class QmlBridge(QObject):
                     decoded = self._decode_process_output(raw_line)
                     for line in decoded.splitlines():
                         if line.strip():
-                            self.pipelineOutputLine.emit(line)
+                            self._append_log(line)
         except Exception as exc:
-            try:
-                self.pipelineOutputLine.emit(f"[WARN] 推理核心日志读取中断: {exc}")
-            except RuntimeError:
-                pass
+            self._append_log(f"[WARN] 推理核心日志读取中断: {exc}")
         finally:
             exit_code = process.wait()
-            try:
-                self.pipelineFinishedAsync.emit(int(getattr(process, "pid", -1)), int(exit_code))
-            except RuntimeError:
-                pass
-
-    def _debug_report(self, hypothesis_id: str, location: str, msg: str, data=None):
-        env_path = os.path.join(self.project_root, ".dbg", "panel-build-freeze.env")
-        url = "http://127.0.0.1:7777/event"
-        session_id = "panel-build-freeze"
-        try:
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("DEBUG_SERVER_URL="):
-                        url = line.split("=", 1)[1].strip() or url
-                    elif line.startswith("DEBUG_SESSION_ID="):
-                        session_id = line.split("=", 1)[1].strip() or session_id
-        except Exception:
-            pass
-        try:
-            payload = {
-                "sessionId": session_id,
-                "runId": "panel-runtime",
-                "hypothesisId": hypothesis_id,
-                "location": location,
-                "msg": msg,
-                "data": data or {},
-            }
-            urllib.request.urlopen(
-                urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                ),
-                timeout=0.5,
-            ).read()
-        except Exception:
-            pass
+            self._pipeline_finished(int(getattr(process, "pid", -1)), int(exit_code))
 
     def _load_pyserial(self):
         try:
@@ -540,7 +722,7 @@ class QmlBridge(QObject):
     def _list_serial_ports(self):
         ports = []
         seen = set()
-        serial_mod, list_ports = self._load_pyserial()
+        _, list_ports = self._load_pyserial()
         if list_ports is not None:
             try:
                 for port in list_ports.comports():
@@ -628,7 +810,7 @@ class QmlBridge(QObject):
     def _normalize_path(self, value: str) -> str:
         if not value:
             return ""
-        text = value.strip()
+        text = str(value).strip()
         if text.startswith("file:///"):
             parsed = urlparse(text)
             return os.path.normpath(unquote(parsed.path.lstrip("/")))
@@ -689,7 +871,7 @@ class QmlBridge(QObject):
 
     def _motion_mode_code(self) -> str:
         text = str(self.motion_mode)
-        return "neural" if text in ("神经模式", "绁炵粡妯″紡", "绁炵粡妯″紡") else "classic"
+        return "neural" if text in ("神经模式", "绁炵粡妯″紡") else "classic"
 
     def _trigger_mode_code(self) -> int:
         text = str(self.trigger_mode)
@@ -698,12 +880,6 @@ class QmlBridge(QObject):
         if text in ("连续长按开火", "杩炵画闀挎寜寮€鐏火"):
             return 2
         return 0
-
-    def _to_file_url(self, path_value: str) -> str:
-        normalized = self._normalize_path(path_value)
-        if not normalized:
-            return ""
-        return QUrl.fromLocalFile(normalized).toString()
 
     def _sanitize_vk_csv(self, raw_text: str, default_value: str) -> str:
         values = []
@@ -798,9 +974,6 @@ class QmlBridge(QObject):
 
     def _normalize_y_offset(self, value, default_value: float) -> float:
         parsed = self._coerce_float(value, default_value)
-        # Backward compatibility: legacy core used center-based offsets where
-        # negative values were used by the legacy center-based offset mode.
-        # New core uses 0..1 from head to foot and should keep non-negative inputs unchanged.
         if -0.5 <= parsed < 0.0:
             parsed = parsed + 0.5
         return max(0.0, min(1.0, parsed))
@@ -819,14 +992,6 @@ class QmlBridge(QObject):
             return True
         if text in ("0", "false", "no", "off"):
             return False
-        return default_value
-
-    def _coerce_color(self, value, default_value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            return default_value
-        if len(text) == 7 and text.startswith("#"):
-            return text
         return default_value
 
     def _resolve_background_mode(self, preferred_mode: str = "") -> str:
@@ -850,14 +1015,8 @@ class QmlBridge(QObject):
         self.last_infer_latency_ms = None
         self._update_runtime_metrics_labels()
 
-    def _current_palette(self):
-        palette = dict(self.THEME_PRESETS.get(self.theme_name, self.THEME_PRESETS["极夜青辉"]))
-        if self.theme_name == "自定义主题":
-            palette["accent"] = self.custom_theme_color
-        return palette
-
     def _selected_classes_list(self):
-        if self.class_model.rowCount() > 0:
+        if self.class_model.row_count() > 0:
             selected = self.class_model.selected_ids()
             if selected:
                 return selected
@@ -874,11 +1033,12 @@ class QmlBridge(QObject):
     def _update_status_labels(self):
         self.status_model_text = f"模型: {os.path.basename(self.model_path) if self.model_path else '未选择'}"
         self.status_engine_text = f"引擎: {os.path.basename(self.engine_path) if self.engine_path else '未选择'}"
-        self._emit_state()
 
     def _update_from_map(self, data):
         if not data:
             return
+        previous_model_path = self.model_path
+        previous_engine_path = self.engine_path
         self.model_path = self._normalize_path(str(data.get("model_path", self.model_path)))
         self.engine_path = self._normalize_path(str(data.get("engine_path", self.engine_path)))
         self.imgsz = self._coerce_int(data.get("imgsz", self.imgsz), self.imgsz)
@@ -891,9 +1051,7 @@ class QmlBridge(QObject):
         self.y_offset = self._clamp_y_offset(data.get("y_offset", self.y_offset), self.y_offset)
         self.fps_limit = max(0, self._coerce_int(data.get("fps_limit", self.fps_limit), self.fps_limit))
         self.trigger_mode = str(data.get("trigger_mode", self.trigger_mode)) or "关闭"
-        self.trigger_delay = self._coerce_float(
-            data.get("trigger_delay", self.trigger_delay), self.trigger_delay
-        )
+        self.trigger_delay = self._coerce_float(data.get("trigger_delay", self.trigger_delay), self.trigger_delay)
         self.trigger_hitbox_enter_scale = self._clamp_float(
             data.get("trigger_hitbox_enter_scale", self.trigger_hitbox_enter_scale),
             self.trigger_hitbox_enter_scale,
@@ -926,28 +1084,15 @@ class QmlBridge(QObject):
         self.stick_rad = self._coerce_float(data.get("stick_rad", self.stick_rad), self.stick_rad)
         lghub_value = data.get("lghub_enabled", data.get("lghub", self.lghub_enabled))
         self.lghub_enabled = self._coerce_bool(lghub_value, self.lghub_enabled)
-        esp32_value = data.get("esp32_enabled", self.esp32_enabled)
-        self.esp32_enabled = self._coerce_bool(esp32_value, self.esp32_enabled)
+        self.esp32_enabled = self._coerce_bool(data.get("esp32_enabled", self.esp32_enabled), self.esp32_enabled)
         self.esp32_port = str(data.get("esp32_port", self.esp32_port)).strip() or self.esp32_port
         self.esp32_baud = max(1200, self._coerce_int(data.get("esp32_baud", self.esp32_baud), self.esp32_baud))
         self.card_opacity = self._coerce_int(data.get("card_opacity", self.card_opacity), self.card_opacity)
-        self.theme_name = str(data.get("theme_name", self.theme_name)) or self.theme_name
-        self.custom_theme_color = self._coerce_color(
-            data.get("custom_theme_color", self.custom_theme_color), self.custom_theme_color
-        )
-        self.background_image_path = self._normalize_path(
-            str(data.get("background_image_path", self.background_image_path))
-        )
-        self.background_video_path = self._normalize_path(
-            str(data.get("background_video_path", self.background_video_path))
-        )
+        self.background_image_path = self._normalize_path(str(data.get("background_image_path", self.background_image_path)))
+        self.background_video_path = self._normalize_path(str(data.get("background_video_path", self.background_video_path)))
         self.background_video_url = str(data.get("background_video_url", self.background_video_url)).strip()
-        self.background_volume = self._coerce_int(
-            data.get("background_volume", self.background_volume), self.background_volume
-        )
-        self.active_background_mode = self._resolve_background_mode(
-            data.get("active_background_mode", self.active_background_mode)
-        )
+        self.background_volume = self._coerce_int(data.get("background_volume", self.background_volume), self.background_volume)
+        self.active_background_mode = self._resolve_background_mode(data.get("active_background_mode", self.active_background_mode))
         self.pipeline_mode = str(data.get("pipeline_mode", self.pipeline_mode)) or "性能模式"
         self.motion_mode = str(data.get("motion_mode", self.motion_mode)) or "经典模式"
         self.neural_curvature = self._clamp_float(
@@ -968,6 +1113,18 @@ class QmlBridge(QObject):
         self.class_model.set_checked_from_csv(self.selected_classes_text)
         self._sync_selected_classes_text()
         self._update_status_labels()
+        self._handle_path_side_effects(previous_model_path, previous_engine_path)
+
+    def _handle_path_side_effects(self, previous_model_path: str, previous_engine_path: str):
+        if self.model_path != previous_model_path:
+            if self.model_path:
+                self._append_log(f">> 已选择模型: {self.model_path}")
+                self.parse_model_info_async(self.model_path)
+            else:
+                self.available_classes_text = ""
+                self.model_info_text = "模型信息: 未解析"
+        if self.engine_path != previous_engine_path and self.engine_path:
+            self._append_log(f">> 已选择引擎: {self.engine_path}")
 
     def _settings_path(self):
         return os.path.join(self.project_root, self.SAVE_FILE)
@@ -985,7 +1142,14 @@ class QmlBridge(QObject):
 
     def _persist_settings(self):
         settings = self._load_existing_settings()
-        for obsolete_key in ("head_y_offset", "body_y_offset", "head_classes", "body_classes"):
+        for obsolete_key in (
+            "head_y_offset",
+            "body_y_offset",
+            "head_classes",
+            "body_classes",
+            "theme_name",
+            "custom_theme_color",
+        ):
             settings.pop(obsolete_key, None)
         settings.update(
             {
@@ -1021,8 +1185,6 @@ class QmlBridge(QObject):
                 "stick_en": 1 if self.stick_enable else 0,
                 "lghub": 1 if self.lghub_enabled else 0,
                 "card_opacity": self.card_opacity,
-                "theme_name": self.theme_name,
-                "custom_theme_color": self.custom_theme_color,
                 "background_image_path": self._to_project_config_path(self.background_image_path),
                 "background_video_path": self._to_project_config_path(self.background_video_path),
                 "background_video_url": self.background_video_url,
@@ -1049,7 +1211,9 @@ class QmlBridge(QObject):
         legacy_settings_detected = any(
             key in settings for key in ("head_y_offset", "body_y_offset", "head_classes", "body_classes")
         )
-        settings_adjusted = legacy_settings_detected
+        settings_adjusted = legacy_settings_detected or any(
+            key in settings for key in ("theme_name", "custom_theme_color")
+        )
         self.model_path = self._normalize_path(settings.get("model_path", self.model_path))
         self.engine_path = self._normalize_path(settings.get("engine_path", self.engine_path))
         self.imgsz = int(settings.get("imgsz", self.imgsz))
@@ -1063,6 +1227,7 @@ class QmlBridge(QObject):
         self.y_offset = self._normalize_y_offset(raw_y_offset, self.y_offset)
         if self._coerce_float(raw_y_offset, self.y_offset) != self.y_offset:
             legacy_settings_detected = True
+            settings_adjusted = True
         self.fps_limit = max(0, int(settings.get("fps_limit", self.fps_limit)))
         self.kalman_en = self._coerce_bool(settings.get("kalman_en", self.kalman_en), self.kalman_en)
         raw_kalman_pred = settings.get("kalman_pred", self.kalman_pred)
@@ -1107,21 +1272,11 @@ class QmlBridge(QObject):
         self.esp32_port = str(settings.get("esp32_port", self.esp32_port)).strip() or self.esp32_port
         self.esp32_baud = max(1200, int(settings.get("esp32_baud", self.esp32_baud)))
         self.card_opacity = int(settings.get("card_opacity", self.card_opacity))
-        self.theme_name = str(settings.get("theme_name", self.theme_name)) or self.theme_name
-        self.custom_theme_color = self._coerce_color(
-            settings.get("custom_theme_color", self.custom_theme_color), self.custom_theme_color
-        )
-        self.background_image_path = self._normalize_path(
-            settings.get("background_image_path", self.background_image_path)
-        )
-        self.background_video_path = self._normalize_path(
-            settings.get("background_video_path", self.background_video_path)
-        )
+        self.background_image_path = self._normalize_path(settings.get("background_image_path", self.background_image_path))
+        self.background_video_path = self._normalize_path(settings.get("background_video_path", self.background_video_path))
         self.background_video_url = str(settings.get("background_video_url", self.background_video_url)).strip()
         self.background_volume = int(settings.get("background_volume", self.background_volume))
-        self.active_background_mode = self._resolve_background_mode(
-            settings.get("active_background_mode", self.active_background_mode)
-        )
+        self.active_background_mode = self._resolve_background_mode(settings.get("active_background_mode", self.active_background_mode))
         self.pipeline_mode = str(settings.get("pipeline_mode", self.pipeline_mode)) or "性能模式"
         self.motion_mode = str(settings.get("motion_mode", self.motion_mode)) or "经典模式"
         legacy_strength = settings.get("neural_strength", None)
@@ -1150,17 +1305,16 @@ class QmlBridge(QObject):
             self.selected_classes_text = ",".join(str(x) for x in selected_classes)
             self.class_model.set_checked_from_csv(self.selected_classes_text)
         self.model_info_text = "模型信息: 已恢复上次配置"
-        self._append_log(">> QML 试验版已恢复上次保存的参数配置。")
+        self._append_log(">> Web 面板已恢复上次保存的参数配置。")
         if settings_adjusted:
             try:
                 self._persist_settings()
                 if legacy_settings_detected:
                     self._append_log(">> 已自动迁移旧版 Y 偏移配置到 0~1 新语义。")
                 else:
-                    self._append_log(">> 已自动校正卡尔曼预测系数到安全范围 0.0~4.0。")
+                    self._append_log(">> 已清理旧主题字段，当前 Web 只保留固定主题。")
             except Exception as exc:
                 self._append_log(f"[WARN] 自动校正配置失败: {exc}")
-        self._emit_state()
         if self.model_path and os.path.exists(self.model_path):
             self.parse_model_info_async(self.model_path)
 
@@ -1171,12 +1325,65 @@ class QmlBridge(QObject):
         self._sync_selected_classes_text()
         self._emit_state()
 
+    def parse_model_info_async(self, file_path: str):
+        path = self._normalize_path(file_path)
+        if not path or not os.path.exists(path):
+            self.model_info_text = "模型信息: 文件不存在"
+            self.available_classes_text = ""
+            self._emit_state()
+            return
+
+        def worker():
+            warnings.filterwarnings("ignore")
+            options = []
+            status = "模型信息: 无法读取类别"
+            engine_metadata_unavailable = False
+            try:
+                if path.endswith(".engine"):
+                    engine_metadata_unavailable = True
+                    status = "模型信息: Engine 无内置类别信息，请使用 ONNX 解析或手动选择类别"
+                elif path.endswith(".pt"):
+                    from ultralytics import YOLO
+
+                    model = YOLO(path, task="detect")
+                    options = [f"{k} - {v}" for k, v in model.names.items()]
+                elif path.endswith(".onnx"):
+                    import onnx
+
+                    model = onnx.load(path)
+                    names_dict = {}
+                    for prop in model.metadata_props:
+                        if prop.key != "names":
+                            continue
+                        parsed = ast.literal_eval(prop.value)
+                        if isinstance(parsed, dict):
+                            names_dict = {str(k): v for k, v in parsed.items()}
+                        elif isinstance(parsed, list):
+                            names_dict = {str(i): name for i, name in enumerate(parsed)}
+                        break
+                    if not names_dict:
+                        names_dict = {"0": "class_0"}
+                    options = [f"{k} - {v}" for k, v in names_dict.items()]
+                if options:
+                    status = f"模型信息: 成功解析 {len(options)} 个类别"
+                elif not engine_metadata_unavailable:
+                    status = "模型信息: 未识别到类别信息"
+            except Exception as exc:
+                status = f"模型信息: 解析失败 ({exc})"
+            self._apply_parsed_model_info(options, status)
+
+        self.model_info_text = "模型信息: 正在解析类别..."
+        self._emit_state()
+        threading.Thread(target=worker, daemon=True).start()
+
     def _prime_cpu_usage(self):
         idle, total = self._snapshot_cpu_times()
         self._cpu_prev_idle = idle
         self._cpu_prev_total = total
 
     def _snapshot_cpu_times(self):
+        if not hasattr(ctypes, "windll"):
+            return None, None
         idle_time = FILETIME()
         kernel_time = FILETIME()
         user_time = FILETIME()
@@ -1206,6 +1413,8 @@ class QmlBridge(QObject):
         return max(0.0, min(100.0, (total_delta - idle_delta) * 100.0 / total_delta))
 
     def _sample_memory_usage(self):
+        if not hasattr(ctypes, "windll"):
+            return None, None, None
         status = MEMORYSTATUSEX()
         status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
         if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
@@ -1234,8 +1443,7 @@ class QmlBridge(QObject):
             return None
         if not output:
             return None
-        first_line = output.splitlines()[0]
-        parts = [part.strip() for part in first_line.split(",")]
+        parts = [part.strip() for part in output.splitlines()[0].split(",")]
         if len(parts) < 3:
             return None
         try:
@@ -1259,9 +1467,7 @@ class QmlBridge(QObject):
             if self.last_true_fps is not None
             else "帧率: --"
         )
-        self._emit_state()
 
-    @Slot()
     def refreshEsp32SerialPorts(self):
         ports = self._list_serial_ports()
         if ports:
@@ -1275,13 +1481,21 @@ class QmlBridge(QObject):
             self._append_log("[WARN] 未扫描到可用串口。")
         self._emit_state()
 
-    @Slot()
+    def _set_esp32_scan_running(self, running: bool):
+        self.esp32_scan_running = bool(running)
+        self._emit_state()
+
+    def _set_esp32_scan_status(self, text: str):
+        self.esp32_scan_status = str(text)
+        self._append_log(text)
+        self._emit_state()
+
     def autoDetectEsp32Serial(self):
         if self.esp32_scan_running:
             self._append_log("[WARN] 当前已有 ESP32 检测任务在进行。")
             return
 
-        def _worker():
+        def worker():
             self._set_esp32_scan_running(True)
             try:
                 ports = self._list_serial_ports()
@@ -1313,9 +1527,7 @@ class QmlBridge(QObject):
                 for port_item in ports:
                     for baud in baud_candidates:
                         ok, detail = self._probe_serial_port(port_item["port"], baud)
-                        self._append_log(
-                            f"[INFO] 串口探测 {port_item['port']} @ {baud}: {'OK' if ok else detail}"
-                        )
+                        self._append_log(f"[INFO] 串口探测 {port_item['port']} @ {baud}: {'OK' if ok else detail}")
                         if ok:
                             self.esp32_port = port_item["port"]
                             self.esp32_baud = baud
@@ -1329,34 +1541,27 @@ class QmlBridge(QObject):
             finally:
                 self._set_esp32_scan_running(False)
 
-        threading.Thread(target=_worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-    @Slot()
     def probeEsp32Connection(self):
         if self.esp32_scan_running:
             self._append_log("[WARN] 当前已有 ESP32 检测任务在进行。")
             return
 
-        def _worker():
+        def worker():
             self._set_esp32_scan_running(True)
             try:
                 ok, detail = self._probe_serial_port(self.esp32_port, self.esp32_baud)
                 if ok:
-                    self.esp32_serial_ports_text = (
-                        f"串口候选: 当前目标 {self.esp32_port} @ {self.esp32_baud} 响应正常"
-                    )
-                    self._set_esp32_scan_status(
-                        f"[SUCCESS] 串口检测通过: {self.esp32_port} @ {self.esp32_baud} | {detail}"
-                    )
+                    self.esp32_serial_ports_text = f"串口候选: 当前目标 {self.esp32_port} @ {self.esp32_baud} 响应正常"
+                    self._set_esp32_scan_status(f"[SUCCESS] 串口检测通过: {self.esp32_port} @ {self.esp32_baud} | {detail}")
                 else:
-                    self._set_esp32_scan_status(
-                        f"[WARN] 串口检测失败: {self.esp32_port} @ {self.esp32_baud} | {detail}"
-                    )
+                    self._set_esp32_scan_status(f"[WARN] 串口检测失败: {self.esp32_port} @ {self.esp32_baud} | {detail}")
                 self._emit_state()
             finally:
                 self._set_esp32_scan_running(False)
 
-        threading.Thread(target=_worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
     def _extract_runtime_metrics(self, message: str):
         fps_match = self._fps_pattern.search(message)
@@ -1409,6 +1614,21 @@ class QmlBridge(QObject):
         self.gpu_usage_value = float(metrics.get("gpu_usage_value", -1.0))
         self.gpu_metric_text = str(metrics.get("gpu_metric_text", "GPU: N/A"))
         self._emit_state()
+
+    def _update_system_metrics(self):
+        with self._metrics_lock:
+            if self._metrics_sample_in_flight:
+                return
+            self._metrics_sample_in_flight = True
+
+        def worker():
+            try:
+                self._apply_system_metrics(self._collect_system_metrics())
+            finally:
+                with self._metrics_lock:
+                    self._metrics_sample_in_flight = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _format_seconds_left(self, seconds_left: int) -> str:
         if seconds_left < 0:
@@ -1498,7 +1718,6 @@ class QmlBridge(QObject):
             self.license_status_detail = message or "未读取到已记住的授权"
         self._emit_state()
 
-    @Slot()
     def refreshLicenseStatus(self):
         if self._is_pipeline_running():
             if not self._refresh_cached_license_countdown():
@@ -1515,7 +1734,7 @@ class QmlBridge(QObject):
                 return
             self._license_status_in_flight = True
 
-        def _worker():
+        def worker():
             status = {"success": False, "message": "授权状态读取失败"}
             try:
                 exe_path = self.runtime_exe_path
@@ -1542,12 +1761,11 @@ class QmlBridge(QObject):
             except Exception as exc:
                 status = {"success": False, "message": f"授权状态读取失败: {exc}"}
             finally:
-                try:
-                    self.licenseStatusSampled.emit(status)
-                except RuntimeError:
-                    pass
+                self._apply_license_status(status)
                 with self._license_status_lock:
                     self._license_status_in_flight = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _read_update_current_version(self) -> str:
         version_file = os.path.join(self.project_root, ".updates", "current_version.txt")
@@ -1595,16 +1813,6 @@ class QmlBridge(QObject):
             creationflags=self._hidden_process_flags(),
         )
 
-    @Slot(str)
-    def setUpdateManifestUrl(self, manifest_url: str):
-        value = str(manifest_url or "").strip()
-        if not value:
-            return
-        self.update_manifest_url = value
-        self.update_status_text = "更新源已设置，等待检查"
-        self._emit_state()
-
-    @Slot()
     def checkForUpdates(self):
         with self._update_lock:
             if self._update_in_flight:
@@ -1612,17 +1820,13 @@ class QmlBridge(QObject):
             self._update_in_flight = True
         self._set_update_running(True, "正在检查更新...")
 
-        def _worker():
+        def worker():
             try:
                 manifest = load_manifest(self.update_manifest_url)
                 current = self._read_update_current_version()
                 available = current != manifest.version
-                message = (
-                    f"发现新版本 {manifest.version}"
-                    if available
-                    else f"当前已是最新版本 {manifest.version}"
-                )
-                self.updateStatusSampled.emit(
+                message = f"发现新版本 {manifest.version}" if available else f"当前已是最新版本 {manifest.version}"
+                self._apply_update_status(
                     {
                         "success": True,
                         "running": False,
@@ -1634,7 +1838,7 @@ class QmlBridge(QObject):
                     }
                 )
             except Exception as exc:
-                self.updateStatusSampled.emit(
+                self._apply_update_status(
                     {
                         "success": False,
                         "error": True,
@@ -1647,12 +1851,11 @@ class QmlBridge(QObject):
                 with self._update_lock:
                     self._update_in_flight = False
 
-        threading.Thread(target=_worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-    @Slot()
     def applyAvailableUpdate(self):
         if self._is_pipeline_running():
-            self.updateStatusSampled.emit(
+            self._apply_update_status(
                 {
                     "success": False,
                     "error": True,
@@ -1668,7 +1871,7 @@ class QmlBridge(QObject):
             self._update_in_flight = True
         self._set_update_running(True, "正在下载并应用更新...")
 
-        def _worker():
+        def worker():
             try:
                 manifest = self._update_pending_manifest or load_manifest(self.update_manifest_url)
                 project_path = Path(self.project_root)
@@ -1680,7 +1883,7 @@ class QmlBridge(QObject):
                     validate=self._validate_runtime_after_update,
                 )
                 current = self._read_update_current_version()
-                self.updateStatusSampled.emit(
+                self._apply_update_status(
                     {
                         "success": True,
                         "running": False,
@@ -1692,7 +1895,7 @@ class QmlBridge(QObject):
                     }
                 )
             except Exception as exc:
-                self.updateStatusSampled.emit(
+                self._apply_update_status(
                     {
                         "success": False,
                         "error": True,
@@ -1705,239 +1908,8 @@ class QmlBridge(QObject):
                 with self._update_lock:
                     self._update_in_flight = False
 
-        threading.Thread(target=_worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-    def _update_system_metrics(self):
-        with self._metrics_lock:
-            if self._metrics_sample_in_flight:
-                return
-            self._metrics_sample_in_flight = True
-
-        def _worker():
-            try:
-                metrics = self._collect_system_metrics()
-                try:
-                    self.systemMetricsSampled.emit(metrics)
-                except RuntimeError:
-                    pass
-            finally:
-                with self._metrics_lock:
-                    self._metrics_sample_in_flight = False
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _update_recording_display(self, target: str, display: str):
-        if target == "aim":
-            self.aim_keys_display = display
-        else:
-            self.trigger_keys_display = display
-        self._emit_state()
-
-    def _finish_recording(self, target: str, value_csv: str, display: str, log_message: str):
-        self.current_record_target = None
-        if target == "aim":
-            self.aim_keys = value_csv
-            self.aim_keys_display = display
-        else:
-            self.trigger_keys = value_csv
-            self.trigger_keys_display = display
-        self._append_log(log_message)
-        self._emit_state()
-
-    def parse_model_info_async(self, file_path: str):
-        path = self._normalize_path(file_path)
-        if not path or not os.path.exists(path):
-            self.model_info_text = "模型信息: 文件不存在"
-            self.available_classes_text = ""
-            self._emit_state()
-            return
-
-        def _worker():
-            warnings.filterwarnings("ignore")
-            options = []
-            status = "模型信息: 无法读取类别"
-            engine_metadata_unavailable = False
-            try:
-                if path.endswith(".engine"):
-                    engine_metadata_unavailable = True
-                    status = "模型信息: Engine 无内置类别信息，请使用 ONNX 解析或手动选择类别"
-                elif path.endswith(".pt"):
-                    from ultralytics import YOLO
-
-                    model = YOLO(path, task="detect")
-                    names_dict = model.names
-                    options = [f"{k} - {v}" for k, v in names_dict.items()]
-                elif path.endswith(".onnx"):
-                    import onnx
-
-                    model = onnx.load(path)
-                    names_dict = {}
-                    for prop in model.metadata_props:
-                        if prop.key != "names":
-                            continue
-                        parsed = ast.literal_eval(prop.value)
-                        if isinstance(parsed, dict):
-                            names_dict = {str(k): v for k, v in parsed.items()}
-                        elif isinstance(parsed, list):
-                            names_dict = {str(i): name for i, name in enumerate(parsed)}
-                        break
-                    if not names_dict:
-                        names_dict = {"0": "class_0"}
-                    options = [f"{k} - {v}" for k, v in names_dict.items()]
-                if options:
-                    status = f"模型信息: 成功解析 {len(options)} 个类别"
-                elif not engine_metadata_unavailable:
-                    status = "模型信息: 未识别到类别信息"
-            except Exception as exc:
-                status = f"模型信息: 解析失败 ({exc})"
-            self.modelParsed.emit(options, status)
-
-        self.model_info_text = "模型信息: 正在解析类别..."
-        self._emit_state()
-        threading.Thread(target=_worker, daemon=True).start()
-
-    @Slot(str)
-    def setModelPath(self, value: str):
-        self.model_path = self._normalize_path(value)
-        self._update_status_labels()
-        if self.model_path:
-            self._append_log(f">> 已选择模型: {self.model_path}")
-            self.parse_model_info_async(self.model_path)
-        self._emit_state()
-
-    @Slot(str)
-    def setEnginePath(self, value: str):
-        self.engine_path = self._normalize_path(value)
-        self._update_status_labels()
-        if self.engine_path:
-            self._append_log(f">> 已选择引擎: {self.engine_path}")
-        self._emit_state()
-
-    @Slot(str, result=str)
-    def toLocalPath(self, value: str):
-        return self._normalize_path(value)
-
-    @Slot(int, bool)
-    def setClassChecked(self, row: int, checked: bool):
-        self.class_model.setChecked(row, checked)
-        self._sync_selected_classes_text()
-        if self._is_pipeline_running():
-            self._write_pipeline_config()
-        self._emit_state()
-
-    @Slot(str)
-    def startKeyRecord(self, target: str):
-        if self.current_record_target is not None:
-            self._append_log("[WARN] 当前已有录入任务在进行。")
-            return
-        if target not in ("aim", "trigger"):
-            self._append_log(f"[ERROR] 未知录入目标: {target}")
-            return
-        self.current_record_target = target
-        if target == "aim":
-            self.aim_keys_display = "按 ESC 结束录入..."
-        else:
-            self.trigger_keys_display = "按 ESC 结束录入..."
-        self._append_log(f">> 进入[{ '自瞄' if target == 'aim' else '扳机' }]按键录入模式，按 ESC 结束。")
-        self._emit_state()
-        threading.Thread(target=self._record_keys_worker, args=(target,), daemon=True).start()
-
-    def _record_keys_worker(self, target: str):
-        try:
-            try:
-                from pynput import keyboard, mouse
-            except ImportError:
-                subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", "pynput"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=self._hidden_process_flags(),
-                )
-                from pynput import keyboard, mouse
-
-            recorded_vk_codes = set()
-            recorded_names = []
-            if target == "aim":
-                default_vk = 0x02
-                default_name = "右键 (VK:2)"
-            else:
-                default_vk = 0x01
-                default_name = "左键 (VK:1)"
-
-            def emit_progress():
-                display = " + ".join(recorded_names) + " (按ESC结束)"
-                self.keyProgress.emit(target, display)
-
-            def on_press(key):
-                try:
-                    if key == keyboard.Key.esc:
-                        return False
-                    vk = None
-                    name = ""
-                    if hasattr(key, "vk") and key.vk is not None:
-                        vk = key.vk
-                        name = getattr(key, "name", str(key))
-                    elif hasattr(key, "value") and hasattr(key.value, "vk"):
-                        vk = key.value.vk
-                        name = key.name
-                    elif hasattr(key, "char") and key.char:
-                        vk = ord(key.char.upper())
-                        name = key.char.upper()
-                    if vk and vk not in recorded_vk_codes:
-                        recorded_vk_codes.add(vk)
-                        recorded_names.append(f"{name} (VK:{vk})")
-                        emit_progress()
-                except Exception:
-                    return True
-                return True
-
-            def on_click(_x, _y, button, pressed):
-                if not pressed:
-                    return
-                try:
-                    mapping = {
-                        mouse.Button.left: (0x01, "左键"),
-                        mouse.Button.right: (0x02, "右键"),
-                        mouse.Button.middle: (0x04, "中键"),
-                        mouse.Button.x1: (0x05, "侧键1"),
-                        mouse.Button.x2: (0x06, "侧键2"),
-                    }
-                    if button not in mapping:
-                        return
-                    vk, name = mapping[button]
-                    if vk not in recorded_vk_codes:
-                        recorded_vk_codes.add(vk)
-                        recorded_names.append(f"{name} (VK:{vk})")
-                        emit_progress()
-                except Exception:
-                    return
-
-            mouse_listener = mouse.Listener(on_click=on_click)
-            keyboard_listener = keyboard.Listener(on_press=on_press)
-            mouse_listener.start()
-            keyboard_listener.start()
-            keyboard_listener.join()
-            mouse_listener.stop()
-
-            if not recorded_vk_codes:
-                recorded_vk_codes.add(default_vk)
-                recorded_names.append(default_name)
-
-            value_csv = ",".join(str(vk) for vk in sorted(recorded_vk_codes))
-            display = " + ".join(recorded_names)
-            log_message = f">> 已保存[{ '自瞄' if target == 'aim' else '扳机' }]按键配置: {display}"
-            self.keyFinished.emit(target, value_csv, display, log_message)
-        except Exception as exc:
-            fallback_value = "2" if target == "aim" else "1"
-            fallback_display = "右键 (VK:2)" if target == "aim" else "左键 (VK:1)"
-            self.keyFinished.emit(
-                target,
-                fallback_value,
-                fallback_display,
-                f"[ERROR] 按键录入失败: {exc}",
-            )
-
-    @Slot(str)
     def resetKeys(self, target: str):
         if target == "aim":
             self.aim_keys = "2"
@@ -1952,28 +1924,160 @@ class QmlBridge(QObject):
             return
         self._emit_state()
 
-    @Slot("QVariantMap")
-    def updateVisualSettings(self, data):
-        self._update_from_map(data)
-        if self._is_pipeline_running():
-            self._write_pipeline_config()
+    def recordKeys(self, target: str, payload):
+        try:
+            data = dict(payload or {})
+            raw_keys = data.get("keys", data.get("vk", ""))
+            raw_text = ",".join(str(item) for item in raw_keys) if isinstance(raw_keys, list) else str(raw_keys)
+            keys = self._sanitize_vk_csv(raw_text, "")
+            if not keys:
+                raise ValueError
+            vk = int(keys.split(",", 1)[0])
+        except (TypeError, ValueError):
+            raise MobileControlError(422, "VALIDATION_ERROR", "按键录入缺少有效 VK")
+        if vk < 1 or vk > 255:
+            raise MobileControlError(422, "VALIDATION_ERROR", "VK 必须在 1..255 范围内")
+        if target == "aim":
+            self.aim_keys = keys
+            self.aim_keys_display = self._format_vk_display(self.aim_keys, "2")
+            self._append_log(f">> 已保存[自瞄]按键配置: {self.aim_keys_display}")
+        elif target == "trigger":
+            self.trigger_keys = keys
+            self.trigger_keys_display = self._format_vk_display(self.trigger_keys, "1")
+            self._append_log(f">> 已保存[扳机]按键配置: {self.trigger_keys_display}")
+        else:
+            raise MobileControlError(422, "VALIDATION_ERROR", "未知按键录入目标")
         self._emit_state()
 
-    @Slot(str)
-    def setBackgroundImagePath(self, value: str):
-        self.background_image_path = self._normalize_path(value)
-        if self.background_image_path:
-            self.background_video_path = ""
-            self.background_video_url = ""
-        self.active_background_mode = self._resolve_background_mode("image")
-        self._append_log(
-            f"[INFO] 背景已切换为图片: {os.path.basename(self.background_image_path)}"
-            if self.background_image_path
-            else "[INFO] 已清除背景图片。"
+    def _web_panel_lan_host(self):
+        candidates = []
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(0.2)
+                sock.connect(("8.8.8.8", 80))
+                candidates.append(sock.getsockname()[0])
+        except Exception:
+            pass
+        try:
+            for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = item[4][0]
+                if ip not in candidates:
+                    candidates.append(ip)
+        except Exception:
+            pass
+        for ip in candidates:
+            if ip and not ip.startswith("127."):
+                return ip
+        return "127.0.0.1"
+
+    def _is_local_tcp_port_open(self, port: int) -> bool:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            return False
+        if port <= 0:
+            return False
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.15):
+                return True
+        except OSError:
+            return False
+
+    def _probe_web_panel_server(self, server: MobileControlServer) -> bool:
+        url = f"http://127.0.0.1:{server.port}/api/state"
+        request = urllib.request.Request(url, headers={"X-Neko-Pin": server.pin})
+        try:
+            with urllib.request.urlopen(request, timeout=0.5) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return False
+        return bool(body.get("ok") and isinstance(body.get("data"), dict) and "config" in body["data"])
+
+    def _new_web_panel_server(self, port: int) -> MobileControlServer:
+        return MobileControlServer(
+            state_provider=self._web_panel_state_provider,
+            update_handler=self.update_handler,
+            action_handler=self.action_handler,
+            host="0.0.0.0",
+            port=port,
         )
+
+    def _start_web_panel_server_fixed_port(self) -> MobileControlServer:
+        requested_port = int(self.web_panel_port)
+        if self._is_local_tcp_port_open(requested_port):
+            raise OSError(f"固定端口 {requested_port} 已被占用，请先关闭旧 Web 面板进程。")
+
+        server = self._new_web_panel_server(requested_port)
+        try:
+            server.start()
+        except OSError as exc:
+            raise OSError(f"固定端口 {requested_port} 不可用: {exc}") from exc
+
+        if self._probe_web_panel_server(server):
+            return server
+
+        failed_port = server.port
+        try:
+            server.stop()
+        except Exception:
+            pass
+        raise OSError(f"Web 面板固定端口自检失败: 127.0.0.1:{failed_port}")
+
+    def start_web_panel(self, open_browser: bool = False):
+        if self.web_panel_server is not None:
+            self._append_log("[INFO] Web 面板已经在运行。")
+            self._emit_state()
+            if open_browser:
+                self.open_web_panel()
+            return self.web_panel_local_url or self.web_panel_url
+        try:
+            server = self._start_web_panel_server_fixed_port()
+        except Exception as exc:
+            self._append_log(f"[ERROR] Web 面板启动失败: {exc}")
+            self._emit_state()
+            return ""
+        host = self._web_panel_lan_host()
+        self.web_panel_server = server
+        self.web_panel_pin = server.pin
+        self.web_panel_url = f"http://{host}:{server.port}/?pin={server.pin}"
+        self.web_panel_local_url = f"http://127.0.0.1:{server.port}/?pin={server.pin}"
+        self.web_panel_status = f"Web 面板: 已启动 {host}:{server.port}"
+        self._append_log(f"[INFO] Web 面板已启动: {self.web_panel_url}")
+        self._append_log("[HINT] 手机与电脑需在同一路由器，或手机连接电脑 Windows 移动热点。")
+        self._append_log("[HINT] 如果浏览器打不开，请允许 Windows 防火墙的专用网络访问。")
+        self._emit_state()
+        if open_browser:
+            self.open_web_panel()
+        return self.web_panel_local_url or self.web_panel_url
+
+    def stop_web_panel(self):
+        server = self.web_panel_server
+        self.web_panel_server = None
+        if server is not None:
+            try:
+                server.stop()
+            except Exception as exc:
+                self._append_log(f"[WARN] Web 面板停止异常: {exc}")
+        self.web_panel_pin = ""
+        self.web_panel_url = ""
+        self.web_panel_local_url = ""
+        self.web_panel_status = "Web 面板: 未启动"
+        self._append_log("[INFO] Web 面板已停止。")
         self._emit_state()
 
-    @Slot()
+    def open_web_panel(self):
+        if self.web_panel_server is None:
+            self.start_web_panel(open_browser=False)
+        target = self.web_panel_local_url or self.web_panel_url
+        if not target:
+            self._append_log("[WARN] Web 面板尚未启动，无法打开。")
+            return
+        try:
+            webbrowser.open(target)
+            self._append_log("[INFO] 已在本机浏览器打开 Web 面板。")
+        except Exception as exc:
+            self._append_log(f"[WARN] 打开 Web 面板失败: {exc}")
+
     def clearBackgroundImage(self):
         self.background_image_path = ""
         self.background_video_path = ""
@@ -1982,35 +2086,6 @@ class QmlBridge(QObject):
         self._append_log("[INFO] 已恢复默认渐变背景。")
         self._emit_state()
 
-    @Slot(str)
-    def setBackgroundVideoPath(self, value: str):
-        self.background_video_path = self._normalize_path(value)
-        if self.background_video_path:
-            self.background_image_path = ""
-            self.background_video_url = ""
-        self.active_background_mode = self._resolve_background_mode("video")
-        self._append_log(
-            f"[INFO] 背景已切换为本地视频: {os.path.basename(self.background_video_path)}"
-            if self.background_video_path
-            else "[INFO] 已清除背景视频。"
-        )
-        self._emit_state()
-
-    @Slot(str)
-    def setBackgroundVideoUrl(self, value: str):
-        self.background_video_url = str(value).strip()
-        if self.background_video_url:
-            self.background_image_path = ""
-            self.background_video_path = ""
-        self.active_background_mode = self._resolve_background_mode("web")
-        self._append_log(
-            "[INFO] 已设置在线视频背景链接。"
-            if self.background_video_url
-            else "[INFO] 已清除在线视频背景链接。"
-        )
-        self._emit_state()
-
-    @Slot()
     def openNetron(self):
         model_path = self.model_path.strip()
         if not model_path or not os.path.exists(model_path):
@@ -2021,15 +2096,11 @@ class QmlBridge(QObject):
             self._append_log(f"[INFO] 已尝试用 Netron 打开: {os.path.basename(model_path)}")
         except Exception:
             try:
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "", sys.executable, "-m", "netron", model_path],
-                    shell=False,
-                )
+                subprocess.Popen(["cmd", "/c", "start", "", sys.executable, "-m", "netron", model_path], shell=False)
                 self._append_log(f"[INFO] 已通过 python -m netron 打开: {os.path.basename(model_path)}")
             except Exception as exc:
                 self._append_log(f"[ERROR] 启动 Netron 失败: {exc}")
 
-    @Slot("QVariantMap")
     def saveSettings(self, data):
         self._update_from_map(data)
         try:
@@ -2038,7 +2109,6 @@ class QmlBridge(QObject):
         except Exception as exc:
             self._append_log(f"[ERROR] 保存配置失败: {exc}")
 
-    @Slot("QVariantMap")
     def startConversion(self, data):
         self._update_from_map(data)
         model_path = self.model_path
@@ -2048,7 +2118,7 @@ class QmlBridge(QObject):
         if not model_path.lower().endswith(".onnx"):
             self._append_log("[ERROR] 当前独立编译包仅支持 .onnx -> .engine。")
             return
-        if self.conversion_process and self.conversion_process.state() != QProcess.NotRunning:
+        if self._is_conversion_running():
             self._append_log("[WARN] 当前已有编译任务在运行。")
             return
         builder_path = os.path.join(self.runtime_root, "build_texture_preprocess_engine.exe")
@@ -2072,52 +2142,48 @@ class QmlBridge(QObject):
             return
         self.saveSettings({})
         texture_input_size = self._texture_builder_input_size()
-        self._pending_engine_output_path = os.path.join(
-            self._texture_preprocess_engine_path(model_path, texture_input_size),
-        )
+        self._pending_engine_output_path = self._texture_preprocess_engine_path(model_path, texture_input_size)
         os.makedirs(self.models_root, exist_ok=True)
-        self.conversion_process = QProcess(self)
-        self.conversion_process.setProgram(builder_path)
-        self.conversion_process.setArguments(
-            [model_path, self._pending_engine_output_path, str(texture_input_size), str(texture_input_size), "1"]
-        )
-        self.conversion_process.setWorkingDirectory(builder_working_dir)
-        self.conversion_process.setProcessChannelMode(QProcess.MergedChannels)
-        self.conversion_process.readyReadStandardOutput.connect(self._read_conversion_output)
-        self.conversion_process.finished.connect(self._conversion_finished)
-        # #region debug-point A:start-conversion
-        self._debug_report("A", "qml_bridge.py:startConversion", "[DEBUG] starting conversion process", {"model_path": model_path, "builder_path": builder_path, "pending_engine_output_path": self._pending_engine_output_path, "working_directory": builder_working_dir, "arguments": [model_path, self._pending_engine_output_path, str(texture_input_size), str(texture_input_size), "1"]})
-        # #endregion
-        self.conversionRunningChanged.emit()
+        args = [builder_path, model_path, self._pending_engine_output_path, str(texture_input_size), str(texture_input_size), "1"]
         self._append_log(f">> 开始编译 TexPre FP16 模型: {os.path.basename(model_path)}")
         self._append_log(f">> 输出引擎: {self._pending_engine_output_path}")
         self._append_log(f">> Plugin 输入尺寸: {texture_input_size}x{texture_input_size}")
         self._append_log(">> 当前使用 runtime\\build_texture_preprocess_engine.exe 生成 TexturePreprocessPlugin FP16 Engine。")
         self._append_log(f">> 编译依赖目录: {builder_working_dir}")
-        self.conversion_process.start()
-        # #region debug-point B:post-start-state
-        self._debug_report("B", "qml_bridge.py:startConversion", "[DEBUG] conversion process start invoked", {"qt_state_after_start_call": int(self.conversion_process.state())})
-        # #endregion
-
-    def _read_conversion_output(self):
-        if not self.conversion_process:
+        try:
+            self.conversion_process = subprocess.Popen(
+                args,
+                cwd=builder_working_dir,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=self._hidden_process_flags(),
+            )
+        except Exception as exc:
+            self.conversion_process = None
+            self._append_log(f"[ERROR] 编译进程启动失败: {exc}")
             return
-        data = self._decode_process_output(self.conversion_process.readAllStandardOutput().data())
-        # #region debug-point C:conversion-output
-        if data.strip():
-            self._debug_report("C", "qml_bridge.py:_read_conversion_output", "[DEBUG] conversion output received", {"length": len(data), "preview": data[:500], "qt_state": int(self.conversion_process.state())})
-        # #endregion
-        for line in data.splitlines():
-            if line.strip():
-                path_match = self._engine_output_pattern.search(line)
-                if path_match:
-                    self._pending_engine_output_path = self._normalize_path(path_match.group(1).strip())
-                self._append_log(line)
+        threading.Thread(target=self._pump_conversion_output, args=(self.conversion_process,), daemon=True).start()
 
-    def _conversion_finished(self, exit_code, _exit_status):
-        # #region debug-point D:conversion-finished
-        self._debug_report("D", "qml_bridge.py:_conversion_finished", "[DEBUG] conversion process finished", {"exit_code": int(exit_code), "pending_engine_output_path": self._pending_engine_output_path, "engine_exists": bool(self._pending_engine_output_path and os.path.exists(self._pending_engine_output_path))})
-        # #endregion
+    def _pump_conversion_output(self, process):
+        try:
+            if process.stdout:
+                for raw_line in iter(process.stdout.readline, b""):
+                    decoded = self._decode_process_output(raw_line)
+                    for line in decoded.splitlines():
+                        if line.strip():
+                            path_match = self._engine_output_pattern.search(line)
+                            if path_match:
+                                self._pending_engine_output_path = self._normalize_path(path_match.group(1).strip())
+                            self._append_log(line)
+        finally:
+            exit_code = process.wait()
+            self._conversion_finished(int(getattr(process, "pid", -1)), int(exit_code))
+
+    def _conversion_finished(self, process_id, exit_code):
+        if self.conversion_process and getattr(self.conversion_process, "pid", -1) != process_id:
+            return
+        self.conversion_process = None
         if exit_code == 0:
             self._append_log("[SUCCESS] 编译任务完成，.engine 已生成。")
             if self._pending_engine_output_path and os.path.exists(self._pending_engine_output_path):
@@ -2128,7 +2194,7 @@ class QmlBridge(QObject):
         else:
             self._append_log(f"[ERROR] 编译失败，退出码: {exit_code}")
         self._pending_engine_output_path = ""
-        self.conversionRunningChanged.emit()
+        self._emit_state()
 
     def _write_pipeline_config(self) -> bool:
         engine_path = self.engine_path
@@ -2147,10 +2213,9 @@ class QmlBridge(QObject):
         trigger_mode = self._trigger_mode_code()
         texture_preprocess_enabled = self._is_texture_preprocess_engine(engine_path)
         texture_plugin_input = self._texture_plugin_input_size(engine_path)
-        config_path = self.runtime_config_path
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.runtime_config_path), exist_ok=True)
         try:
-            with open(config_path, "w", encoding="utf-8") as f:
+            with open(self.runtime_config_path, "w", encoding="utf-8") as f:
                 f.write(f"engine_path={self._to_runtime_engine_config_path(engine_path)}\n")
                 f.write(f"roi_w={self.roi}\n")
                 f.write(f"roi_h={self.roi}\n")
@@ -2259,7 +2324,6 @@ class QmlBridge(QObject):
             self._append_log("[HINT] 请重新部署 E:\\4.29\\429\\trt_cpp_pipeline\\deploy_runtime.bat")
             return False
 
-    @Slot("QVariantMap")
     def startPipeline(self, data):
         self._update_from_map(data)
         if self._is_pipeline_running():
@@ -2323,16 +2387,10 @@ class QmlBridge(QObject):
             self.status_mode_text = "模式: 未启动"
             self._reset_runtime_metrics()
             self._emit_state()
-            self.pipelineRunningChanged.emit()
             self._append_log(f"[ERROR] 推理核心启动失败: {exc}")
             return
         threading.Thread(target=self._pump_pipeline_output, args=(self.pipeline_process,), daemon=True).start()
-        self.pipelineRunningChanged.emit()
-        self._append_log(f"[INFO] 推理核心已隐藏启动，日志已接入 QML 面板。PID={self.pipeline_process.pid}")
-
-    def _read_pipeline_output(self):
-        # Pipeline output is pumped by _pump_pipeline_output when using hidden Popen.
-        return
+        self._append_log(f"[INFO] 推理核心已隐藏启动，日志已接入 Web 面板。PID={self.pipeline_process.pid}")
 
     def _pipeline_finished(self, process_id, exit_code):
         if self.pipeline_process and getattr(self.pipeline_process, "pid", -1) != process_id:
@@ -2349,121 +2407,21 @@ class QmlBridge(QObject):
         self.status_mode_text = "模式: 未启动"
         self._reset_runtime_metrics()
         self._emit_state()
-        self.pipelineRunningChanged.emit()
 
-    @Slot()
     def stopPipeline(self):
         if self._is_pipeline_running():
             self._pipeline_stop_requested = True
-            self.pipeline_process.kill()
-            try:
-                self.pipeline_process.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                pass
+            kill = getattr(self.pipeline_process, "kill", None)
+            if callable(kill):
+                kill()
+                try:
+                    self.pipeline_process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
             self._append_log("[INFO] 已请求停止推理核心。")
             self.status_mode_text = "模式: 未启动"
             self._reset_runtime_metrics()
             self._emit_state()
-            self.pipelineRunningChanged.emit()
-
-    @Slot()
-    def shutdown(self):
-        try:
-            self.metrics_timer.stop()
-        except Exception:
-            pass
-        try:
-            self._persist_settings()
-        except Exception:
-            pass
-        if self.conversion_process and self.conversion_process.state() != QProcess.NotRunning:
-            self.conversion_process.kill()
-            self.conversion_process.waitForFinished(500)
-        if self._is_pipeline_running():
-            self._pipeline_stop_requested = True
-            self.pipeline_process.kill()
-            try:
-                self.pipeline_process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
-
-    def _get_log_text(self):
-        return "\n".join(self._log_lines)
-
-    def _get_model_path(self):
-        return self.model_path
-
-    def _get_engine_path(self):
-        return self.engine_path
-
-    def _get_models_library_url(self):
-        return self._to_file_url(self.models_root)
-
-    def _get_imgsz(self):
-        return self.imgsz
-
-    def _get_roi(self):
-        return self.roi
-
-    def _get_conf(self):
-        return self.conf
-
-    def _get_nms(self):
-        return self.nms
-
-    def _get_pid_p(self):
-        return self.pid_p
-
-    def _get_pid_i(self):
-        return self.pid_i
-
-    def _get_pid_d(self):
-        return self.pid_d
-
-    def _get_y_offset(self):
-        return self.y_offset
-
-    def _get_fps_limit(self):
-        return self.fps_limit
-
-    def _get_trigger_mode(self):
-        return self.trigger_mode
-
-    def _get_trigger_delay(self):
-        return self.trigger_delay
-
-    def _get_trigger_hitbox_enter_scale(self):
-        return self.trigger_hitbox_enter_scale
-
-    def _get_trigger_hitbox_exit_scale(self):
-        return self.trigger_hitbox_exit_scale
-
-    def _get_trigger_hold_grace_ms(self):
-        return self.trigger_hold_grace_ms
-
-    def _get_card_opacity(self):
-        return self.card_opacity
-
-    def _get_theme_name(self):
-        return self.theme_name
-
-    def _get_custom_theme_color(self):
-        return self.custom_theme_color
-
-    def _get_background_image_path(self):
-        return self.background_image_path
-
-    def _get_background_video_path(self):
-        return self.background_video_path
-
-    def _get_background_video_url(self):
-        return self.background_video_url
-
-    def _get_background_volume(self):
-        return self.background_volume
-
-    def _get_active_background_mode(self):
-        return self.active_background_mode
 
     def _get_background_status_text(self):
         if self.active_background_mode == "image" and self.background_image_path:
@@ -2474,291 +2432,25 @@ class QmlBridge(QObject):
             return "背景: 在线视频"
         return "背景: 默认渐变"
 
-    def _get_pipeline_mode(self):
-        return self.pipeline_mode
-
-    def _get_capture_path_text(self):
-        return self.capture_path_text
-
-    def _get_motion_mode(self):
-        return self.motion_mode
-
-    def _get_neural_curvature(self):
-        return self.neural_curvature
-
-    def _get_neural_tremor(self):
-        return self.neural_tremor
-
-    def _get_aim_keys(self):
-        return self.aim_keys
-
-    def _get_trigger_keys(self):
-        return self.trigger_keys
-
-    def _get_aim_keys_display(self):
-        return self.aim_keys_display
-
-    def _get_trigger_keys_display(self):
-        return self.trigger_keys_display
-
-    def _get_selected_classes_text(self):
-        return self.selected_classes_text
-
-    def _get_available_classes_text(self):
-        return self.available_classes_text
-
-    def _get_model_info_text(self):
-        return self.model_info_text
-
-    def _get_status_mode_text(self):
-        return self.status_mode_text
-
-    def _get_status_model_text(self):
-        return self.status_model_text
-
-    def _get_status_engine_text(self):
-        return self.status_engine_text
-
-    def _get_cpu_metric_text(self):
-        return self.cpu_metric_text
-
-    def _get_gpu_metric_text(self):
-        return self.gpu_metric_text
-
-    def _get_memory_metric_text(self):
-        return self.memory_metric_text
-
-    def _get_cpu_usage_value(self):
-        return self.cpu_usage_value
-
-    def _get_gpu_usage_value(self):
-        return self.gpu_usage_value
-
-    def _get_memory_usage_value(self):
-        return self.memory_usage_value
-
-    def _get_latency_metric_text(self):
-        return self.latency_metric_text
-
-    def _get_fps_metric_text(self):
-        return self.fps_metric_text
-
-    def _get_class_model(self):
-        return self.class_model
-
-    def _get_log_model(self):
-        return self.log_model
-
-    def _get_recording_active(self):
-        return self.current_record_target is not None
-
-    def _get_current_record_target(self):
-        return self.current_record_target or ""
-
-    def _get_conversion_running(self):
-        return bool(self.conversion_process and self.conversion_process.state() != QProcess.NotRunning)
-
-    def _get_pipeline_running(self):
-        return self._is_pipeline_running()
-
-    def _get_kalman_en(self):
-        return self.kalman_en
-
-    def _get_kalman_pred(self):
-        return self.kalman_pred
-
-    def _get_recoil_en(self):
-        return self.recoil_en
-
-    def _get_trigger_recoil_en(self):
-        return self.trigger_recoil_en
-
-    def _get_recoil_strength(self):
-        return self.recoil_strength
-
-    def _get_recoil_delay(self):
-        return self.recoil_delay
-
-    def _get_license_expiry_text(self):
-        return self.license_expiry_text
-
-    def _get_license_badge_text(self):
-        return self.license_badge_text
-
-    def _get_license_expiry_compact_text(self):
-        return self.license_expiry_compact_text
-
-    def _get_license_remaining_text(self):
-        return self.license_remaining_text
-
-    def _get_license_status_detail(self):
-        return self.license_status_detail
-
-    def _get_update_status_text(self):
-        return self.update_status_text
-
-    def _get_update_current_version(self):
-        return self.update_current_version
-
-    def _get_update_latest_version(self):
-        return self.update_latest_version
-
-    def _get_update_available(self):
-        return self.update_available
-
-    def _get_update_running(self):
-        return self.update_running
-
-    def _get_update_manifest_url(self):
-        return self.update_manifest_url
-
-    def _get_stick_enable(self):
-        return self.stick_enable
-
-    def _get_stick_int(self):
-        return self.stick_int
-
-    def _get_stick_rad(self):
-        return self.stick_rad
-
-    def _get_lghub_enabled(self):
-        return self.lghub_enabled
-
-    def _get_esp32_enabled(self):
-        return self.esp32_enabled
-
-    def _get_esp32_port(self):
-        return self.esp32_port
-
-    def _get_esp32_baud(self):
-        return self.esp32_baud
-
-    def _get_esp32_scan_status(self):
-        return self.esp32_scan_status
-
-    def _get_esp32_serial_ports_text(self):
-        return self.esp32_serial_ports_text
-
-    def _get_esp32_scan_running(self):
-        return self.esp32_scan_running
-
-    def _get_accent_color(self):
-        return self._current_palette()["accent"]
-
-    def _get_accent2_color(self):
-        return self._current_palette()["accent2"]
-
-    def _get_surface_color(self):
-        return self._current_palette()["surface"]
-
-    def _get_surface_alt_color(self):
-        return self._current_palette()["surface_alt"]
-
-    def _get_text_color(self):
-        return self._current_palette()["text"]
-
-    def _get_muted_color(self):
-        return self._current_palette()["muted"]
-
-    def _get_hero_start_color(self):
-        return self._current_palette()["hero_start"]
-
-    def _get_hero_end_color(self):
-        return self._current_palette()["hero_end"]
-
-    def _get_sidebar_color(self):
-        return self._current_palette()["sidebar"]
-
-    modelPath = Property(str, _get_model_path, notify=stateChanged)
-    enginePath = Property(str, _get_engine_path, notify=stateChanged)
-    modelsLibraryUrl = Property(str, _get_models_library_url, constant=True)
-    imgszValue = Property(int, _get_imgsz, notify=stateChanged)
-    roiValue = Property(int, _get_roi, notify=stateChanged)
-    confValue = Property(float, _get_conf, notify=stateChanged)
-    nmsValue = Property(float, _get_nms, notify=stateChanged)
-    pidPValue = Property(float, _get_pid_p, notify=stateChanged)
-    pidIValue = Property(float, _get_pid_i, notify=stateChanged)
-    pidDValue = Property(float, _get_pid_d, notify=stateChanged)
-    yOffsetValue = Property(float, _get_y_offset, notify=stateChanged)
-    fpsLimitValue = Property(int, _get_fps_limit, notify=stateChanged)
-    triggerModeValue = Property(str, _get_trigger_mode, notify=stateChanged)
-    triggerDelayValue = Property(float, _get_trigger_delay, notify=stateChanged)
-    triggerHitboxEnterScaleValue = Property(float, _get_trigger_hitbox_enter_scale, notify=stateChanged)
-    triggerHitboxExitScaleValue = Property(float, _get_trigger_hitbox_exit_scale, notify=stateChanged)
-    triggerHoldGraceMsValue = Property(float, _get_trigger_hold_grace_ms, notify=stateChanged)
-    cardOpacityValue = Property(int, _get_card_opacity, notify=stateChanged)
-    themeNameValue = Property(str, _get_theme_name, notify=stateChanged)
-    customThemeColorValue = Property(str, _get_custom_theme_color, notify=stateChanged)
-    backgroundImagePathValue = Property(str, _get_background_image_path, notify=stateChanged)
-    backgroundVideoPathValue = Property(str, _get_background_video_path, notify=stateChanged)
-    backgroundVideoUrlValue = Property(str, _get_background_video_url, notify=stateChanged)
-    backgroundVolumeValue = Property(int, _get_background_volume, notify=stateChanged)
-    activeBackgroundModeValue = Property(str, _get_active_background_mode, notify=stateChanged)
-    backgroundStatusText = Property(str, _get_background_status_text, notify=stateChanged)
-    pipelineModeValue = Property(str, _get_pipeline_mode, notify=stateChanged)
-    capturePathText = Property(str, _get_capture_path_text, notify=stateChanged)
-    motionModeValue = Property(str, _get_motion_mode, notify=stateChanged)
-    neuralCurvatureValue = Property(float, _get_neural_curvature, notify=stateChanged)
-    neuralTremorValue = Property(float, _get_neural_tremor, notify=stateChanged)
-    aimKeysValue = Property(str, _get_aim_keys, notify=stateChanged)
-    triggerKeysValue = Property(str, _get_trigger_keys, notify=stateChanged)
-    aimKeysDisplayValue = Property(str, _get_aim_keys_display, notify=stateChanged)
-    triggerKeysDisplayValue = Property(str, _get_trigger_keys_display, notify=stateChanged)
-    selectedClassesText = Property(str, _get_selected_classes_text, notify=stateChanged)
-    availableClassesText = Property(str, _get_available_classes_text, notify=stateChanged)
-    modelInfoText = Property(str, _get_model_info_text, notify=stateChanged)
-    statusModeText = Property(str, _get_status_mode_text, notify=stateChanged)
-    statusModelText = Property(str, _get_status_model_text, notify=stateChanged)
-    statusEngineText = Property(str, _get_status_engine_text, notify=stateChanged)
-    cpuMetricText = Property(str, _get_cpu_metric_text, notify=stateChanged)
-    gpuMetricText = Property(str, _get_gpu_metric_text, notify=stateChanged)
-    memoryMetricText = Property(str, _get_memory_metric_text, notify=stateChanged)
-    cpuUsageValue = Property(float, _get_cpu_usage_value, notify=stateChanged)
-    gpuUsageValue = Property(float, _get_gpu_usage_value, notify=stateChanged)
-    memoryUsageValue = Property(float, _get_memory_usage_value, notify=stateChanged)
-    latencyMetricText = Property(str, _get_latency_metric_text, notify=stateChanged)
-    fpsMetricText = Property(str, _get_fps_metric_text, notify=stateChanged)
-    classModel = Property(QObject, _get_class_model, constant=True)
-    logModel = Property(QObject, _get_log_model, constant=True)
-    recordingActive = Property(bool, _get_recording_active, notify=stateChanged)
-    currentRecordTarget = Property(str, _get_current_record_target, notify=stateChanged)
-    kalmanEnableValue = Property(bool, _get_kalman_en, notify=stateChanged)
-    kalmanPredValue = Property(float, _get_kalman_pred, notify=stateChanged)
-    recoilEnableValue = Property(bool, _get_recoil_en, notify=stateChanged)
-    triggerRecoilEnableValue = Property(bool, _get_trigger_recoil_en, notify=stateChanged)
-    recoilStrengthValue = Property(float, _get_recoil_strength, notify=stateChanged)
-    recoilDelayValue = Property(float, _get_recoil_delay, notify=stateChanged)
-    licenseExpiryText = Property(str, _get_license_expiry_text, notify=stateChanged)
-    licenseBadgeText = Property(str, _get_license_badge_text, notify=stateChanged)
-    licenseExpiryCompactText = Property(str, _get_license_expiry_compact_text, notify=stateChanged)
-    licenseRemainingText = Property(str, _get_license_remaining_text, notify=stateChanged)
-    licenseStatusDetail = Property(str, _get_license_status_detail, notify=stateChanged)
-    updateStatusText = Property(str, _get_update_status_text, notify=stateChanged)
-    updateCurrentVersion = Property(str, _get_update_current_version, notify=stateChanged)
-    updateLatestVersion = Property(str, _get_update_latest_version, notify=stateChanged)
-    updateAvailable = Property(bool, _get_update_available, notify=stateChanged)
-    updateRunning = Property(bool, _get_update_running, notify=stateChanged)
-    updateManifestUrl = Property(str, _get_update_manifest_url, notify=stateChanged)
-    stickEnableValue = Property(bool, _get_stick_enable, notify=stateChanged)
-    stickIntValue = Property(float, _get_stick_int, notify=stateChanged)
-    stickRadValue = Property(float, _get_stick_rad, notify=stateChanged)
-    lghubEnabledValue = Property(bool, _get_lghub_enabled, notify=stateChanged)
-    esp32EnabledValue = Property(bool, _get_esp32_enabled, notify=stateChanged)
-    esp32PortValue = Property(str, _get_esp32_port, notify=stateChanged)
-    esp32BaudValue = Property(int, _get_esp32_baud, notify=stateChanged)
-    esp32ScanStatusValue = Property(str, _get_esp32_scan_status, notify=stateChanged)
-    esp32SerialPortsTextValue = Property(str, _get_esp32_serial_ports_text, notify=stateChanged)
-    esp32ScanRunningValue = Property(bool, _get_esp32_scan_running, notify=stateChanged)
-    accentColor = Property(str, _get_accent_color, notify=stateChanged)
-    accent2Color = Property(str, _get_accent2_color, notify=stateChanged)
-    surfaceColor = Property(str, _get_surface_color, notify=stateChanged)
-    surfaceAltColor = Property(str, _get_surface_alt_color, notify=stateChanged)
-    textColor = Property(str, _get_text_color, notify=stateChanged)
-    mutedColor = Property(str, _get_muted_color, notify=stateChanged)
-    heroStartColor = Property(str, _get_hero_start_color, notify=stateChanged)
-    heroEndColor = Property(str, _get_hero_end_color, notify=stateChanged)
-    sidebarColor = Property(str, _get_sidebar_color, notify=stateChanged)
-    logText = Property(str, _get_log_text, notify=logTextChanged)
-    conversionRunning = Property(bool, _get_conversion_running, notify=conversionRunningChanged)
-    pipelineRunning = Property(bool, _get_pipeline_running, notify=pipelineRunningChanged)
-
+    def shutdown(self):
+        self._stop_event.set()
+        self.stop_web_panel()
+        try:
+            self._persist_settings()
+        except Exception:
+            pass
+        if self._is_conversion_running():
+            self.conversion_process.kill()
+            try:
+                self.conversion_process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
+        if self._is_pipeline_running():
+            self._pipeline_stop_requested = True
+            kill = getattr(self.pipeline_process, "kill", None)
+            if callable(kill):
+                kill()
+                try:
+                    self.pipeline_process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass

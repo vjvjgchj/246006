@@ -10,6 +10,14 @@ DEFAULT_PRESERVE = [
     "runtime/logi_driver.dll",
     "gui_settings.json",
 ]
+DEFAULT_DELETE = [
+    "qml",
+    "backend/qml_bridge.py",
+    "6_run_qml_panel.vbs",
+    "run_panel_hidden.pyw",
+    "gui_qml_trial.py",
+    "keyauth_login.py",
+]
 
 
 def sha256_file(path: Path) -> str:
@@ -33,6 +41,11 @@ def main() -> int:
     parser.add_argument("--package-name", default="core", help="Package name used by packages[] mode.")
     parser.add_argument("--asset-name", default="", help="Release asset name. Defaults to local file name.")
     parser.add_argument("--notes", default="", help="Release notes shown by the updater.")
+    parser.add_argument(
+        "--no-web-only-delete",
+        action="store_true",
+        help="Do not add the default delete[] entries for retired QML panel files.",
+    )
     parser.add_argument("--output", default=str(PROJECT_ROOT / "updates" / "stable.json"), help="Output manifest path.")
     args = parser.parse_args()
 
@@ -42,6 +55,8 @@ def main() -> int:
         "notes": args.notes,
         "preserve": DEFAULT_PRESERVE,
     }
+    if not args.no_web_only_delete:
+        manifest["delete"] = DEFAULT_DELETE
 
     if args.package.strip():
         local_package = Path(args.package).resolve()

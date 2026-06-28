@@ -47,6 +47,7 @@ class UpdateManifest:
     files: List[UpdateFile]
     packages: List[UpdatePackage]
     preserve: List[str]
+    delete: List[str]
 
 
 def normalize_relative_path(value: str) -> str:
@@ -119,6 +120,22 @@ def _ensure_updatable_path(
         blocked_lower = normalize_relative_path(blocked).lower()
         if _is_same_or_child(rel_lower, blocked_lower):
             raise UpdateError(f"refusing to update protected file: {rel_path}")
+    safe_project_path(project_root, rel_path)
+    return rel_path
+
+
+def _ensure_deletable_path(
+    project_root: Path,
+    relative_path: str,
+    protected_paths: Iterable[str],
+    preserve_paths: Iterable[str],
+) -> str:
+    rel_path = normalize_relative_path(relative_path)
+    rel_lower = rel_path.lower()
+    for blocked in set(protected_paths) | set(preserve_paths):
+        blocked_lower = normalize_relative_path(blocked).lower()
+        if _is_same_or_child(rel_lower, blocked_lower) or _is_same_or_child(blocked_lower, rel_lower):
+            raise UpdateError(f"refusing to delete protected file: {rel_path}")
     safe_project_path(project_root, rel_path)
     return rel_path
 
@@ -204,6 +221,7 @@ def load_manifest(manifest_url: str) -> UpdateManifest:
         files=files,
         packages=packages,
         preserve=[normalize_relative_path(item) for item in payload.get("preserve", [])],
+        delete=[normalize_relative_path(item) for item in (payload.get("delete", []) or payload.get("remove", []))],
     )
 
 
@@ -286,6 +304,7 @@ def apply_staged_update(
     backup_root.mkdir(parents=True, exist_ok=True)
 
     replaced_files = []
+    deleted_paths = []
     try:
         normalized_protected = {normalize_relative_path(item).lower() for item in DEFAULT_PROTECTED_PATHS}
         normalized_preserve = {normalize_relative_path(item).lower() for item in manifest.preserve}
@@ -304,6 +323,25 @@ def apply_staged_update(
             os.replace(source, target)
             replaced_files.append(rel_path)
 
+        for rel_path in manifest.delete:
+            rel_path = _ensure_deletable_path(project_root, rel_path, normalized_protected, normalized_preserve)
+            target = safe_project_path(project_root, rel_path)
+            backup = safe_project_path(backup_root, rel_path)
+            if not target.exists():
+                continue
+
+            if target.is_dir():
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                if backup.exists():
+                    shutil.rmtree(backup)
+                shutil.copytree(target, backup)
+                shutil.rmtree(target)
+            else:
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, backup)
+                target.unlink()
+            deleted_paths.append(rel_path)
+
         if validate:
             validate()
 
@@ -313,6 +351,7 @@ def apply_staged_update(
         return backup_root
     except Exception:
         rollback_update(project_root, backup_root, replaced_files)
+        rollback_update(project_root, backup_root, deleted_paths)
         raise
 
 

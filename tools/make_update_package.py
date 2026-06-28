@@ -14,6 +14,12 @@ DEFAULT_EXCLUDES = [
     "runtime/logi_driver.dll",
     "gui_settings.json",
     "updates/stable.json",
+    "qml",
+    "backend/qml_bridge.py",
+    "6_run_qml_panel.vbs",
+    "run_panel_hidden.pyw",
+    "gui_qml_trial.py",
+    "keyauth_login.py",
 ]
 
 

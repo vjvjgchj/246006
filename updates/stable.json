@@ -1,17 +1,25 @@
 {
-  "version": "2026.06.28.1",
-  "notes": "auto-detect YOLO model output layouts for v5/v8/v11/v13/v26",
+  "version": "2026.06.28.2",
+  "notes": "web-only panel migration; retire QML chain",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
     "gui_settings.json"
   ],
+  "delete": [
+    "qml",
+    "backend/qml_bridge.py",
+    "6_run_qml_panel.vbs",
+    "run_panel_hidden.pyw",
+    "gui_qml_trial.py",
+    "keyauth_login.py"
+  ],
   "packages": [
     {
       "name": "core",
-      "url": "https://gitee.com/w246006/246006/raw/main/release_assets/neko-core-v2026.06.28.1.zip",
-      "sha256": "A3C05AC2830FF6168B722D5E8A68D6ED1D658173FB8A1A5A8D087F009E690824",
-      "size": 233167
+      "url": "../release_assets/neko-core-v2026.06.28.2.zip",
+      "sha256": "015EFE4B73B2B261C0DB3044118B8F843A4C4FF489634319DC366BC6A13218F8",
+      "size": 57955
     }
   ]
 }
