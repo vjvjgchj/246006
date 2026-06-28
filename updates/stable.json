@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.29.2",
-  "notes": "allow empty target class selection without falling back to class 0",
+  "version": "2026.06.29.3",
+  "notes": "fix two-class anchor-free model layout when only target class 0 is selected",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.29.2.zip",
-      "sha256": "2CA8AA4F0C8EAF8F31677D0F62FD4D97FA65F6AC81FFB2B9E7CDFCA37E1C2DE8",
-      "size": 254616
+      "url": "../release_assets/neko-core-v2026.06.29.3.zip",
+      "sha256": "9EA5A2A75F40CC2D1736A2D46A34E032C10AB627E7CC649BFDC8F2DD6FD05C74",
+      "size": 254680
     }
   ]
 }
