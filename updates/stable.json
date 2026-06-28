@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.28.5",
-  "notes": "fix target class selection persistence in web panel",
+  "version": "2026.06.28.6",
+  "notes": "fix web target class selection race and runtime class persistence",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.28.5.zip",
-      "sha256": "DB68D720D1E7DA354562988421148A7B3B8491711C69F0E4370B31BF619E9CE9",
-      "size": 59531
+      "url": "../release_assets/neko-core-v2026.06.28.6.zip",
+      "sha256": "9F5A305090A06D1F1FD74F346B22CC716B95F40CFCF9904E7BDBBC58F20A5211",
+      "size": 60120
     }
   ]
 }

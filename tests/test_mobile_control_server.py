@@ -392,16 +392,19 @@ class MobileControlServerTest(unittest.TestCase):
         self.assertIn("function renderClassChoices()", body)
         self.assertIn('id="classChoiceList"', body)
         self.assertIn("data-class-id", body)
-        self.assertIn('schedulePatch("selected_classes_text"', body)
+        self.assertIn("function commitClassSelection(value)", body)
+        self.assertNotIn('schedulePatch("selected_classes_text"', body)
 
     def test_class_choice_keeps_pending_selection_during_poll_refresh(self):
         body = WEB_PANEL_HTML
 
         self.assertIn("const pendingValues = new Map();", body)
         self.assertIn('pendingConfigValue("selected_classes_text"', body)
-        self.assertIn("pendingValues.set(key, value);", body)
-        self.assertIn("for (const [pendingKey, pendingValue] of pendingValues)", body)
-        self.assertIn("payload[key] = submittedValue;", body)
+        self.assertIn("let classPatchSerial = 0;", body)
+        self.assertIn("JSON.stringify({[key]: submittedValue})", body)
+        self.assertIn('pendingValues.set("selected_classes_text", text);', body)
+        self.assertIn('JSON.stringify({selected_classes_text: text})', body)
+        self.assertIn("if (serial !== classPatchSerial) return;", body)
         self.assertIn("checkbox.checked = true;", body)
         self.assertIn('state.config = {...state.config, selected_classes_text: next};', body)
 

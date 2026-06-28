@@ -58,6 +58,12 @@ class ClassSelectionState:
     def __init__(self):
         self._items = []
 
+    @staticmethod
+    def _class_id_from_option(option, index):
+        text = str(option or "").strip()
+        match = re.match(r"^\s*(\d+)(?:\s*[-:：].*)?$", text)
+        return match.group(1) if match else str(index)
+
     def row_count(self):
         return len(self._items)
 
@@ -67,8 +73,8 @@ class ClassSelectionState:
         if not options:
             options = ["0 - 默认类别"]
         for index, option in enumerate(options):
-            class_id, _, class_name = str(option).partition(" - ")
-            class_id = class_id.strip() or str(index)
+            class_id = self._class_id_from_option(option, index)
+            _, _, class_name = str(option).partition(" - ")
             class_name = class_name.strip() or f"class_{class_id}"
             items.append(
                 {
@@ -1002,19 +1008,33 @@ class WebPanelController:
         self._update_runtime_metrics_labels()
 
     def _selected_classes_list(self):
-        if self.class_model.row_count() > 0:
-            selected = self.class_model.selected_ids()
-            if selected:
-                return selected
         values = []
+        seen = set()
         for part in str(self.selected_classes_text).split(","):
             part = part.strip()
-            if part:
+            if part and part.isdigit() and part not in seen:
                 values.append(part)
+                seen.add(part)
+        if values:
+            return values
+        if self.class_model.row_count() > 0:
+            selected = [item for item in self.class_model.selected_ids() if str(item).isdigit()]
+            if selected:
+                return selected
         return values
 
     def _sync_selected_classes_text(self):
         self.selected_classes_text = ",".join(self._selected_classes_list()) or "0"
+
+    def _class_options_for_display(self, options):
+        clean = [str(option).strip() for option in (options or []) if str(option).strip()]
+        if clean:
+            return clean
+        fallback_ids = []
+        for class_id in [*self._selected_classes_list(), *(str(index) for index in range(80))]:
+            if class_id not in fallback_ids:
+                fallback_ids.append(class_id)
+        return [f"{class_id} - class_{class_id}" for class_id in fallback_ids]
 
     def _update_status_labels(self):
         self.status_model_text = f"模型: {os.path.basename(self.model_path) if self.model_path else '未选择'}"
@@ -1305,9 +1325,10 @@ class WebPanelController:
             self.parse_model_info_async(self.model_path)
 
     def _apply_parsed_model_info(self, options, status):
-        self.available_classes_text = "\n".join(options) if options else "暂无类别信息"
+        display_options = self._class_options_for_display(options)
+        self.available_classes_text = "\n".join(display_options)
         self.model_info_text = status
-        self.class_model.set_items(options, self._selected_classes_list())
+        self.class_model.set_items(display_options, self._selected_classes_list())
         self._sync_selected_classes_text()
         self._emit_state()
 

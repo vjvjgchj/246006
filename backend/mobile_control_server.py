@@ -1362,6 +1362,7 @@ Quantum</h1>
     let pollTimer = null;
     let heartbeatTimer = null;
     let configRenderToken = 0;
+    let classPatchSerial = 0;
     let recordingTarget = "";
     let recordingKeys = [];
     let recordingMouseSuppressUntil = 0;
@@ -1498,9 +1499,7 @@ Quantum</h1>
         pending.delete(key);
         const submittedValue = pendingValues.get(key);
         try {
-          const payload = collectConfigFromDom();
-          payload[key] = submittedValue;
-          state = await api("/api/config", {method: "PATCH", body: JSON.stringify(payload)});
+          state = await api("/api/config", {method: "PATCH", body: JSON.stringify({[key]: submittedValue})});
           if (pendingValues.get(key) === submittedValue) pendingValues.delete(key);
           renderState(false);
           setToast("已写入: " + key);
@@ -1508,6 +1507,28 @@ Quantum</h1>
           setToast(err.message, true);
         }
       }, 120));
+    }
+    async function commitClassSelection(value) {
+      const text = String(value || "0").split(",").map(item => item.trim()).filter(Boolean).join(",") || "0";
+      const serial = ++classPatchSerial;
+      pendingValues.set("selected_classes_text", text);
+      clearTimeout(pending.get("selected_classes_text"));
+      pending.delete("selected_classes_text");
+      const hidden = $("selectedClassesHidden");
+      if (hidden) hidden.value = text;
+      if (state?.config) state.config = {...state.config, selected_classes_text: text};
+      renderClassChoices();
+      try {
+        const nextState = await api("/api/config", {method: "PATCH", body: JSON.stringify({selected_classes_text: text})});
+        if (serial !== classPatchSerial) return;
+        state = nextState;
+        if (pendingValues.get("selected_classes_text") === text) pendingValues.delete("selected_classes_text");
+        renderState(false);
+        setToast("宸插啓鍏? selected_classes_text");
+      } catch (err) {
+        if (serial !== classPatchSerial) return;
+        setToast(err.message, true);
+      }
     }
     async function panelAction(action, payload = null) {
       const configActions = new Set(["pipeline.start", "settings.save", "model.convert", "model.netron", "esp32.auto", "esp32.probe"]);
@@ -1636,10 +1657,11 @@ Quantum</h1>
       const selectedText = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text || "0");
       const selected = new Set(String(selectedText || "0").split(",").map(item => item.trim()).filter(Boolean));
       const lines = String(state?.model?.availableClassesText || "").split(/\r?\n/).map(item => item.trim()).filter(Boolean);
-      const source = lines.length ? lines : ["0 - 默认类别"];
-      return source.map((item, index) => {
-        const parts = item.split(" - ");
-        const classId = (parts[0] || String(index)).trim();
+      const fallbackIds = [...selected, ...Array.from({length: 80}, (_, index) => String(index))];
+      const classSource = lines.length ? lines : Array.from(new Set(fallbackIds)).map(id => `${id} - class_${id}`);
+      return classSource.map((item, index) => {
+        const match = String(item).match(/^\s*(\d+)/);
+        const classId = match ? match[1] : String(index);
         return {
           id: classId || String(index),
           label: item,
@@ -1667,7 +1689,7 @@ Quantum</h1>
           const hidden = $("selectedClassesHidden");
           if (hidden) hidden.value = next;
           if (state?.config) state.config = {...state.config, selected_classes_text: next};
-          schedulePatch("selected_classes_text", next);
+          commitClassSelection(next);
         });
         const text = document.createElement("span");
         text.textContent = item.label;

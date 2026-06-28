@@ -87,6 +87,61 @@ class WebPanelControllerTest(unittest.TestCase):
                 controller.pipeline_process = None
                 controller.shutdown()
 
+    def test_selected_classes_text_is_authoritative_even_when_model_list_lacks_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            try:
+                controller.selected_classes_text = "0,1,3,5,6"
+
+                controller._apply_parsed_model_info([], "no metadata")
+
+                self.assertEqual(controller.selected_classes_text, "0,1,3,5,6")
+                self.assertEqual(controller._selected_classes_list(), ["0", "1", "3", "5", "6"])
+            finally:
+                controller.shutdown()
+
+    def test_selected_classes_patch_is_not_overridden_by_previous_class_model_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            try:
+                controller.class_model.set_items(["0 - head", "1 - body", "3 - hand"], ["0"])
+
+                state = controller.update_handler({"selected_classes_text": "1,3"})
+
+                self.assertEqual(state["config"]["selected_classes_text"], "1,3")
+                self.assertEqual(controller._selected_classes_list(), ["1", "3"])
+                self.assertEqual(controller.class_model.selected_ids(), ["1", "3"])
+            finally:
+                controller.shutdown()
+
+    def test_running_pipeline_writes_target_classes_from_latest_patch(self):
+        class FakeRunningProcess:
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            (root / "models").mkdir()
+            engine_path = root / "models" / "hp.engine"
+            engine_path.write_bytes(b"engine")
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            controller.engine_path = str(engine_path)
+            controller.pipeline_process = FakeRunningProcess()
+            try:
+                state = controller.update_handler({"selected_classes_text": "1,3,6"})
+                config_text = (root / "runtime" / "config.txt").read_text(encoding="utf-8")
+
+                self.assertEqual(state["config"]["selected_classes_text"], "1,3,6")
+                self.assertIn("target_classes=1,3,6\n", config_text)
+            finally:
+                controller.pipeline_process = None
+                controller.shutdown()
+
     def test_record_key_actions_update_display_without_config_validation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
