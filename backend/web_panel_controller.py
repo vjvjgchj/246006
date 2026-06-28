@@ -493,7 +493,14 @@ class WebPanelController:
                 {"fields": locked},
             )
         self._update_from_map(clean)
-        if self._is_pipeline_running() and not self._write_pipeline_config():
+        try:
+            self._persist_settings()
+        except Exception as exc:
+            self._append_log(f"[ERROR] 实时保存 gui_settings.json 失败: {exc}")
+            raise MobileControlError(500, "SETTINGS_WRITE_FAILED", "Failed to write panel settings")
+
+        should_write_runtime_config = self._is_pipeline_running() or self._runtime_config_write_ready()
+        if should_write_runtime_config and not self._write_pipeline_config():
             raise MobileControlError(409, "CONFIG_WRITE_FAILED", "Failed to write runtime config")
         self._emit_state()
         return self._web_panel_state_provider()
@@ -1134,6 +1141,9 @@ class WebPanelController:
 
     def _settings_path(self):
         return os.path.join(self.project_root, self.SAVE_FILE)
+
+    def _runtime_config_write_ready(self) -> bool:
+        return bool(self.engine_path and os.path.exists(self.engine_path))
 
     def _load_existing_settings(self):
         path = self._settings_path()

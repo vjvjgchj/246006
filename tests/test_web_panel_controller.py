@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import urllib.request
@@ -115,6 +116,42 @@ class WebPanelControllerTest(unittest.TestCase):
                 self.assertEqual(state["config"]["selected_classes_text"], "1,3")
                 self.assertEqual(controller._selected_classes_list(), ["1", "3"])
                 self.assertEqual(controller.class_model.selected_ids(), ["1", "3"])
+            finally:
+                controller.shutdown()
+
+    def test_live_selected_classes_patch_persists_gui_settings_immediately(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            (root / "gui_settings.json").write_text(
+                json.dumps({"selected_classes": ["0", "1", "3", "5", "6"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            try:
+                state = controller.update_handler({"selected_classes_text": "0"})
+                settings = json.loads((root / "gui_settings.json").read_text(encoding="utf-8"))
+
+                self.assertEqual(state["config"]["selected_classes_text"], "0")
+                self.assertEqual(settings["selected_classes"], ["0"])
+            finally:
+                controller.shutdown()
+
+    def test_live_selected_classes_patch_refreshes_runtime_config_when_not_running(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            (root / "models").mkdir()
+            engine_path = root / "models" / "hp.engine"
+            engine_path.write_bytes(b"engine")
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            controller.engine_path = str(engine_path)
+            try:
+                state = controller.update_handler({"selected_classes_text": "0"})
+                config_text = (root / "runtime" / "config.txt").read_text(encoding="utf-8")
+
+                self.assertEqual(state["config"]["selected_classes_text"], "0")
+                self.assertIn("target_classes=0\n", config_text)
             finally:
                 controller.shutdown()
 
