@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.28.4",
-  "notes": "fix web panel explicit shutdown, single pin per port, and copyable mobile URL",
+  "version": "2026.06.28.5",
+  "notes": "fix target class selection persistence in web panel",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.28.4.zip",
-      "sha256": "75CE71F73696667EF4CA7A0BDD2FEAC5191F3BFD0013AC8F180441F9BBBE1817",
-      "size": 59333
+      "url": "../release_assets/neko-core-v2026.06.28.5.zip",
+      "sha256": "DB68D720D1E7DA354562988421148A7B3B8491711C69F0E4370B31BF619E9CE9",
+      "size": 59531
     }
   ]
 }

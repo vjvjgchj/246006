@@ -1356,6 +1356,7 @@ Quantum</h1>
     const mobileUrlInput = $("mobileUrlInput");
     const copyMobileUrlBtn = $("copyMobileUrlBtn");
     const pending = new Map();
+    const pendingValues = new Map();
     let state = null;
     let schemaByKey = new Map();
     let pollTimer = null;
@@ -1442,6 +1443,9 @@ Quantum</h1>
       if (field?.choices) return Number(control.value);
       return control.value;
     }
+    function pendingConfigValue(key, fallback) {
+      return pendingValues.has(key) ? pendingValues.get(key) : fallback;
+    }
     function collectConfigFromDom() {
       const config = {...(state?.config || {})};
       document.querySelectorAll("[data-field-key]").forEach((control) => {
@@ -1450,6 +1454,7 @@ Quantum</h1>
         if (!field) return;
         config[key] = controlValue(control, field);
       });
+      for (const [pendingKey, pendingValue] of pendingValues) config[pendingKey] = pendingValue;
       return config;
     }
     function syncConfigControlsFromState() {
@@ -1487,11 +1492,16 @@ Quantum</h1>
       return false;
     }
     function schedulePatch(key, value) {
+      pendingValues.set(key, value);
       clearTimeout(pending.get(key));
       pending.set(key, setTimeout(async () => {
         pending.delete(key);
+        const submittedValue = pendingValues.get(key);
         try {
-          state = await api("/api/config", {method: "PATCH", body: JSON.stringify(collectConfigFromDom())});
+          const payload = collectConfigFromDom();
+          payload[key] = submittedValue;
+          state = await api("/api/config", {method: "PATCH", body: JSON.stringify(payload)});
+          if (pendingValues.get(key) === submittedValue) pendingValues.delete(key);
           renderState(false);
           setToast("已写入: " + key);
         } catch (err) {
@@ -1623,7 +1633,8 @@ Quantum</h1>
       return listId;
     }
     function parseClassItems() {
-      const selected = new Set(String(state?.config?.selected_classes_text || "0").split(",").map(item => item.trim()).filter(Boolean));
+      const selectedText = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text || "0");
+      const selected = new Set(String(selectedText || "0").split(",").map(item => item.trim()).filter(Boolean));
       const lines = String(state?.model?.availableClassesText || "").split(/\r?\n/).map(item => item.trim()).filter(Boolean);
       const source = lines.length ? lines : ["0 - 默认类别"];
       return source.map((item, index) => {
@@ -1652,8 +1663,10 @@ Quantum</h1>
             .map(input => input.dataset.classId)
             .filter(Boolean);
           const next = values.length ? values.join(",") : item.id;
+          if (!values.length) checkbox.checked = true;
           const hidden = $("selectedClassesHidden");
           if (hidden) hidden.value = next;
+          if (state?.config) state.config = {...state.config, selected_classes_text: next};
           schedulePatch("selected_classes_text", next);
         });
         const text = document.createElement("span");
@@ -1662,7 +1675,7 @@ Quantum</h1>
         target.appendChild(label);
       }
       const hidden = $("selectedClassesHidden");
-      if (hidden) hidden.value = state?.config?.selected_classes_text || "0";
+      if (hidden) hidden.value = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text || "0");
     }
     function renderField(field, options = {}) {
       const value = state?.config?.[field.key];
