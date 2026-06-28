@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.28.6",
-  "notes": "fix web target class selection race and runtime class persistence",
+  "version": "2026.06.29.1",
+  "notes": "fix runtime target class filtering in GPU postprocess finalize",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.28.6.zip",
-      "sha256": "9F5A305090A06D1F1FD74F346B22CC716B95F40CFCF9904E7BDBBC58F20A5211",
-      "size": 60120
+      "url": "../release_assets/neko-core-v2026.06.29.1.zip",
+      "sha256": "C166E07EFBE819E52FAF559340B273CDAEFF308F99D6153D333A1D6BC034CFA1",
+      "size": 254720
     }
   ]
 }
