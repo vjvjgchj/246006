@@ -1,5 +1,4 @@
 import tempfile
-import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -174,6 +173,34 @@ class WebPanelControllerTest(unittest.TestCase):
         finally:
             blocker.stop()
 
+    def test_start_web_panel_reuses_existing_session_pin_for_same_port(self):
+        existing = MobileControlServer(
+            state_provider=lambda: {"config": {}, "logs": []},
+            update_handler=lambda patch: {"config": patch, "logs": []},
+            host="0.0.0.0",
+            port=0,
+            pin="111111",
+        )
+        existing.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                (root / "runtime").mkdir()
+                controller = WebPanelController(str(root), start_background_tasks=False)
+                controller.web_panel_port = existing.port
+                controller._write_web_panel_session(existing)
+                try:
+                    url = controller.start_web_panel(open_browser=False)
+
+                    self.assertIn(f":{existing.port}/?pin=111111", url)
+                    self.assertEqual(controller.web_panel_pin, "111111")
+                    self.assertIsNone(controller.web_panel_server)
+                    self.assertTrue(controller.shutdown_requested())
+                finally:
+                    controller.shutdown()
+        finally:
+            existing.stop()
+
     def test_lan_host_rejects_virtual_benchmark_and_link_local_addresses(self):
         self.assertFalse(WebPanelController._is_usable_web_panel_lan_ip("198.18.0.1"))
         self.assertFalse(WebPanelController._is_usable_web_panel_lan_ip("198.19.255.255"))
@@ -182,36 +209,33 @@ class WebPanelControllerTest(unittest.TestCase):
         self.assertTrue(WebPanelController._is_usable_web_panel_lan_ip("10.153.161.128"))
         self.assertTrue(WebPanelController._is_usable_web_panel_lan_ip("192.168.43.20"))
 
-    def test_web_close_requests_controller_shutdown(self):
+    def test_web_close_only_unregisters_client_without_shutdown(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "runtime").mkdir()
             controller = WebPanelController(str(root), start_background_tasks=False)
-            controller._web_shutdown_delay_seconds = 0.05
             try:
                 controller.action_handler("web.client_open", {"client_id": "tab-a"})
                 self.assertFalse(controller.shutdown_requested())
 
                 controller.action_handler("web.close", {"client_id": "tab-a"})
-                time.sleep(0.2)
 
-                self.assertTrue(controller.shutdown_requested())
+                self.assertFalse(controller.shutdown_requested())
+                self.assertNotIn("tab-a", controller._web_clients)
             finally:
                 controller.shutdown()
 
-    def test_web_reopen_cancels_pending_shutdown(self):
+    def test_web_shutdown_requests_controller_shutdown(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "runtime").mkdir()
             controller = WebPanelController(str(root), start_background_tasks=False)
-            controller._web_shutdown_delay_seconds = 0.2
             try:
                 controller.action_handler("web.client_open", {"client_id": "tab-a"})
-                controller.action_handler("web.close", {"client_id": "tab-a"})
-                controller.action_handler("web.client_open", {"client_id": "tab-b"})
-                time.sleep(0.35)
+                controller.action_handler("web.shutdown", {"client_id": "tab-a", "reason": "button"})
 
-                self.assertFalse(controller.shutdown_requested())
+                self.assertTrue(controller.shutdown_requested())
+                self.assertEqual(controller._web_clients, {})
             finally:
                 controller.shutdown()
 

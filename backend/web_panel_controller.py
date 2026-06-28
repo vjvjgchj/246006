@@ -220,6 +220,7 @@ class WebPanelController:
         self.web_panel_local_url = ""
         self.web_panel_status = "Web 面板: 未启动"
         self.web_panel_port = 24600
+        self.web_panel_session_path = os.path.join(self.project_root, ".updates", "web_panel_session.json")
         self._web_panel_snapshot_lock = threading.RLock()
         self._web_panel_snapshot = {}
         self._web_panel_file_cache_lock = threading.Lock()
@@ -230,8 +231,6 @@ class WebPanelController:
         self._web_panel_non_hot_fields = {field.key for field in MOBILE_CONTROL_FIELDS if not field.hot}
         self._web_clients_lock = threading.Lock()
         self._web_clients = {}
-        self._web_shutdown_generation = 0
-        self._web_shutdown_delay_seconds = 1.2
         self._shutdown_requested = False
         self._stop_event = threading.Event()
         self._background_threads = []
@@ -552,6 +551,8 @@ class WebPanelController:
             self._mark_web_client(raw_payload)
         elif action == "web.close":
             self._close_web_client(raw_payload)
+        elif action == "web.shutdown":
+            self._request_web_shutdown("button")
         else:
             raise MobileControlError(422, "VALIDATION_ERROR", "Unknown runtime action")
         self._emit_state()
@@ -564,34 +565,18 @@ class WebPanelController:
     def _mark_web_client(self, payload):
         client_id = self._web_client_id(payload)
         with self._web_clients_lock:
-            self._web_shutdown_generation += 1
             self._web_clients[client_id] = time.monotonic()
 
     def _close_web_client(self, payload):
         client_id = self._web_client_id(payload)
         with self._web_clients_lock:
             self._web_clients.pop(client_id, None)
-            self._web_shutdown_generation += 1
-            generation = self._web_shutdown_generation
-            has_clients = bool(self._web_clients)
-        if has_clients:
-            return
-        threading.Thread(
-            target=self._request_shutdown_when_no_web_clients,
-            args=(generation,),
-            name="NekoWebAutoShutdown",
-            daemon=True,
-        ).start()
 
-    def _request_shutdown_when_no_web_clients(self, generation: int):
-        delay = max(0.0, float(self._web_shutdown_delay_seconds))
-        if delay > 0:
-            time.sleep(delay)
+    def _request_web_shutdown(self, reason: str = ""):
         with self._web_clients_lock:
-            if generation != self._web_shutdown_generation or self._web_clients:
-                return
-            self._shutdown_requested = True
-        self._append_log("[INFO] Web 页面已关闭，正在停止推理核心并退出 Web 控制器。")
+            self._web_clients.clear()
+        self._shutdown_requested = True
+        self._append_log(f"[INFO] Web 面板收到关闭请求，正在退出。reason={reason or 'manual'}")
         self._stop_event.set()
 
     def shutdown_requested(self) -> bool:
@@ -2001,15 +1986,61 @@ class WebPanelController:
         except OSError:
             return False
 
-    def _probe_web_panel_server(self, server: MobileControlServer) -> bool:
-        url = f"http://127.0.0.1:{server.port}/api/state"
-        request = urllib.request.Request(url, headers={"X-Neko-Pin": server.pin})
+    def _web_panel_url_for(self, host: str, port: int, pin: str) -> str:
+        return f"http://{host}:{int(port)}/?pin={pin}"
+
+    def _read_web_panel_session(self) -> dict:
+        try:
+            with open(self.web_panel_session_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        try:
+            port = int(data.get("port", 0))
+        except (TypeError, ValueError):
+            return {}
+        pin = str(data.get("pin", "")).strip()
+        if port <= 0 or not pin:
+            return {}
+        return {"port": port, "pin": pin}
+
+    def _write_web_panel_session(self, server: MobileControlServer) -> None:
+        data = {"port": int(server.port), "pin": str(server.pin)}
+        directory = os.path.dirname(self.web_panel_session_path)
+        os.makedirs(directory, exist_ok=True)
+        temp_path = self.web_panel_session_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(temp_path, self.web_panel_session_path)
+
+    def _clear_web_panel_session(self, port: int | None = None, pin: str | None = None) -> None:
+        session = self._read_web_panel_session()
+        if port is not None and session.get("port") != int(port):
+            return
+        if pin is not None and session.get("pin") != str(pin):
+            return
+        try:
+            os.remove(self.web_panel_session_path)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+    def _probe_web_panel_session(self, port: int, pin: str) -> bool:
+        url = f"http://127.0.0.1:{int(port)}/api/state"
+        request = urllib.request.Request(url, headers={"X-Neko-Pin": str(pin)})
         try:
             with urllib.request.urlopen(request, timeout=0.5) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except Exception:
             return False
         return bool(body.get("ok") and isinstance(body.get("data"), dict) and "config" in body["data"])
+
+    def _probe_web_panel_server(self, server: MobileControlServer) -> bool:
+        return self._probe_web_panel_session(server.port, server.pin)
 
     def _new_web_panel_server(self, port: int) -> MobileControlServer:
         return MobileControlServer(
@@ -2023,6 +2054,9 @@ class WebPanelController:
     def _start_web_panel_server_fixed_port(self) -> MobileControlServer:
         requested_port = int(self.web_panel_port)
         if self._is_local_tcp_port_open(requested_port):
+            session = self._read_web_panel_session()
+            if session.get("port") == requested_port and self._probe_web_panel_session(requested_port, session.get("pin", "")):
+                return None
             raise OSError(f"固定端口 {requested_port} 已被占用，请先关闭旧 Web 面板进程。")
 
         server = self._new_web_panel_server(requested_port)
@@ -2032,6 +2066,7 @@ class WebPanelController:
             raise OSError(f"固定端口 {requested_port} 不可用: {exc}") from exc
 
         if self._probe_web_panel_server(server):
+            self._write_web_panel_session(server)
             return server
 
         failed_port = server.port
@@ -2055,10 +2090,25 @@ class WebPanelController:
             self._emit_state()
             return ""
         host = self._web_panel_lan_host()
+        if server is None:
+            session = self._read_web_panel_session()
+            port = int(session.get("port", self.web_panel_port))
+            pin = str(session.get("pin", "")).strip()
+            self.web_panel_pin = pin
+            self.web_panel_url = self._web_panel_url_for(host, port, pin)
+            self.web_panel_local_url = self._web_panel_url_for("127.0.0.1", port, pin)
+            self.web_panel_status = f"Web 面板: 已复用 {host}:{port}"
+            self._append_log(f"[INFO] Web 面板端口 {port} 已有会话，复用同一个 PIN。")
+            self._emit_state()
+            if open_browser:
+                self.open_web_panel()
+            self._shutdown_requested = True
+            self._stop_event.set()
+            return self.web_panel_local_url or self.web_panel_url
         self.web_panel_server = server
         self.web_panel_pin = server.pin
-        self.web_panel_url = f"http://{host}:{server.port}/?pin={server.pin}"
-        self.web_panel_local_url = f"http://127.0.0.1:{server.port}/?pin={server.pin}"
+        self.web_panel_url = self._web_panel_url_for(host, server.port, server.pin)
+        self.web_panel_local_url = self._web_panel_url_for("127.0.0.1", server.port, server.pin)
         self.web_panel_status = f"Web 面板: 已启动 {host}:{server.port}"
         self._append_log(f"[INFO] Web 面板已启动: {self.web_panel_url}")
         self._append_log("[HINT] 手机与电脑需在同一路由器，或手机连接电脑 Windows 移动热点。")
@@ -2072,10 +2122,13 @@ class WebPanelController:
         server = self.web_panel_server
         self.web_panel_server = None
         if server is not None:
+            server_port = int(server.port)
+            server_pin = str(server.pin)
             try:
                 server.stop()
             except Exception as exc:
                 self._append_log(f"[WARN] Web 面板停止异常: {exc}")
+            self._clear_web_panel_session(server_port, server_pin)
         self.web_panel_pin = ""
         self.web_panel_url = ""
         self.web_panel_local_url = ""

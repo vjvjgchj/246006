@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.28.3",
-  "notes": "filter virtual adapter IPs for mobile web panel",
+  "version": "2026.06.28.4",
+  "notes": "fix web panel explicit shutdown, single pin per port, and copyable mobile URL",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.28.3.zip",
-      "sha256": "6CB9B90D974B59986E2FF2C60117736A3AB47A1CAEB0E1AB75C76CEB56EB2120",
-      "size": 58130
+      "url": "../release_assets/neko-core-v2026.06.28.4.zip",
+      "sha256": "75CE71F73696667EF4CA7A0BDD2FEAC5191F3BFD0013AC8F180441F9BBBE1817",
+      "size": 59333
     }
   ]
 }

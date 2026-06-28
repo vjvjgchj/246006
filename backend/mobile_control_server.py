@@ -42,6 +42,7 @@ PANEL_ACTIONS = {
     "web.client_open",
     "web.heartbeat",
     "web.close",
+    "web.shutdown",
 }
 
 
@@ -1150,7 +1151,27 @@ WEB_PANEL_HTML = r"""<!doctype html>
       color: #dfefff;
       font: 12px/1.45 "Cascadia Mono", Consolas, monospace;
       white-space: pre-wrap;
+      user-select: text;
     }
+    .log a { color: var(--accent2); text-decoration: underline; user-select: all; }
+    .copy-line {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      margin-top: 9px;
+    }
+    .copy-line input {
+      min-width: 0;
+      height: 34px;
+      padding: 0 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.22);
+      color: var(--text);
+      font: 12px "Cascadia Mono", Consolas, monospace;
+    }
+    .copy-line button { min-height: 34px; padding: 0 10px; }
     .toast { min-height: 24px; color: var(--muted); font-size: 13px; }
     .toast.error { color: var(--danger); }
     @media (max-width: 1180px) {
@@ -1223,6 +1244,10 @@ Quantum</h1>
         </div>
         <div class="button-row">
           <button id="closeWebBtn" class="danger">关闭 Web 面板</button>
+        </div>
+        <div class="copy-line">
+          <input id="mobileUrlInput" readonly value="" placeholder="连接后显示手机访问地址" />
+          <button id="copyMobileUrlBtn" class="ghost" type="button">复制</button>
         </div>
         <div id="toast" class="toast"></div>
       </section>
@@ -1328,6 +1353,8 @@ Quantum</h1>
     const pinInput = $("pinInput");
     const toast = $("toast");
     const logs = $("logs");
+    const mobileUrlInput = $("mobileUrlInput");
+    const copyMobileUrlBtn = $("copyMobileUrlBtn");
     const pending = new Map();
     let state = null;
     let schemaByKey = new Map();
@@ -1343,6 +1370,21 @@ Quantum</h1>
     function setToast(message, isError = false) {
       toast.textContent = message || "";
       toast.className = isError ? "toast error" : "toast";
+    }
+    async function copyText(text) {
+      const value = String(text || "").trim();
+      if (!value) {
+        setToast("暂无可复制的地址。", true);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+      } catch (_) {
+        mobileUrlInput.focus();
+        mobileUrlInput.select();
+        document.execCommand("copy");
+      }
+      setToast("已复制手机访问地址。");
     }
     function withPin(path) {
       const url = new URL(path, window.location.href);
@@ -1374,6 +1416,26 @@ Quantum</h1>
     }
     function metricText(value) {
       return typeof value === "number" && value >= 0 ? `${Math.round(value)}` : "--";
+    }
+    function renderLogs(lines) {
+      const list = Array.isArray(lines) ? lines : [];
+      logs.replaceChildren();
+      const text = list.length ? list.join("\n") : "暂无日志。";
+      const pattern = /(https?:\/\/[^\s<>"']+)/g;
+      let cursor = 0;
+      for (const match of text.matchAll(pattern)) {
+        if (match.index > cursor) logs.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+        const link = document.createElement("a");
+        link.href = match[0];
+        link.textContent = match[0];
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.title = "点击打开，右键可复制链接";
+        logs.appendChild(link);
+        cursor = match.index + match[0].length;
+      }
+      if (cursor < text.length) logs.appendChild(document.createTextNode(text.slice(cursor)));
+      logs.scrollTop = logs.scrollHeight;
     }
     function controlValue(control, field) {
       if (control.type === "checkbox") return control.checked;
@@ -1475,12 +1537,13 @@ Quantum</h1>
     }
     function startHeartbeat() {
       if (heartbeatTimer) return;
+      sendLifecycleAction("web.heartbeat");
       heartbeatTimer = setInterval(() => {
         sendLifecycleAction("web.heartbeat");
       }, 2000);
     }
     async function closeWebPanel() {
-      notifyClientClosed("button");
+      sendLifecycleAction("web.shutdown", {reason: "button"});
       setToast("正在关闭 Web 面板和推理核心...");
       window.setTimeout(() => window.close(), 120);
     }
@@ -1780,8 +1843,8 @@ Quantum</h1>
       $("esp32Status").textContent = `${esp32.scanStatus || "ESP32 检测: 未执行"} / ${esp32.serialPortsText || "串口候选: 未扫描"}`;
       $("startBtn").disabled = running;
       $("stopBtn").disabled = !running;
-      logs.textContent = (state?.logs || []).join("\n") || "暂无日志。";
-      logs.scrollTop = logs.scrollHeight;
+      mobileUrlInput.value = state?.web?.url || state?.web?.localUrl || "";
+      renderLogs(state?.logs);
       if (rebuildConfig) scheduleConfigRender();
     }
     async function loadState(rebuild = true) {
@@ -1802,6 +1865,7 @@ Quantum</h1>
     }
     $("connectBtn").addEventListener("click", () => loadState(true));
     $("closeWebBtn").addEventListener("click", () => closeWebPanel());
+    copyMobileUrlBtn.addEventListener("click", () => copyText(mobileUrlInput.value));
     $("refreshBtn").addEventListener("click", () => loadState(true));
     $("startBtn").addEventListener("click", () => panelAction("pipeline.start"));
     $("stopBtn").addEventListener("click", () => panelAction("pipeline.stop"));
