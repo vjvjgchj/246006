@@ -81,7 +81,7 @@ class ClassSelectionState:
                     "classId": class_id,
                     "className": class_name,
                     "display": f"{class_id} - {class_name}",
-                    "checked": class_id in selected if selected else index == 0,
+                    "checked": class_id in selected,
                 }
             )
         self._items = items
@@ -1031,7 +1031,7 @@ class WebPanelController:
         return values
 
     def _sync_selected_classes_text(self):
-        self.selected_classes_text = ",".join(self._selected_classes_list()) or "0"
+        self.selected_classes_text = ",".join(self._selected_classes_list())
 
     def _class_options_for_display(self, options):
         clean = [str(option).strip() for option in (options or []) if str(option).strip()]
@@ -1122,7 +1122,7 @@ class WebPanelController:
             selected_classes_value = ",".join(str(x) for x in data.get("selected_classes", []))
         self.selected_classes_text = str(
             selected_classes_value if selected_classes_value is not None else self.selected_classes_text
-        ).strip() or "0"
+        ).strip()
         self.class_model.set_checked_from_csv(self.selected_classes_text)
         self._sync_selected_classes_text()
         self._update_status_labels()
@@ -1317,7 +1317,7 @@ class WebPanelController:
         self.trigger_keys = str(settings.get("trigger_keys", self.trigger_keys)).strip() or "1"
         self._refresh_key_display_from_values()
         selected_classes = settings.get("selected_classes", [])
-        if isinstance(selected_classes, list) and selected_classes:
+        if isinstance(selected_classes, list):
             self.selected_classes_text = ",".join(str(x) for x in selected_classes)
             self.class_model.set_checked_from_csv(self.selected_classes_text)
         self.model_info_text = "模型信息: 已恢复上次配置"
@@ -2304,9 +2304,6 @@ class WebPanelController:
             self._append_log("[ERROR] 请先选择有效的 .engine 文件。")
             return False
         selected_classes = self._selected_classes_list()
-        if not selected_classes:
-            self._append_log("[ERROR] 请至少选择一个锁定类别。")
-            return False
         aim_keys = self._sanitize_vk_csv(self.aim_keys, "2")
         trigger_keys = self._sanitize_vk_csv(self.trigger_keys, "1")
         pipeline_mode = self._pipeline_mode_code()

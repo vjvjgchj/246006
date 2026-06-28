@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.29.1",
-  "notes": "fix runtime target class filtering in GPU postprocess finalize",
+  "version": "2026.06.29.2",
+  "notes": "allow empty target class selection without falling back to class 0",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.29.1.zip",
-      "sha256": "C166E07EFBE819E52FAF559340B273CDAEFF308F99D6153D333A1D6BC034CFA1",
-      "size": 254720
+      "url": "../release_assets/neko-core-v2026.06.29.2.zip",
+      "sha256": "2CA8AA4F0C8EAF8F31677D0F62FD4D97FA65F6AC81FFB2B9E7CDFCA37E1C2DE8",
+      "size": 254616
     }
   ]
 }

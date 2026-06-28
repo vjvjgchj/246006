@@ -103,6 +103,11 @@ class MobileControlServerTest(unittest.TestCase):
         self.assertEqual(clean["card_opacity"], 92)
         self.assertEqual(clean["background_image_path"], "assets/bg.png")
 
+    def test_validate_patch_allows_empty_selected_classes(self):
+        clean = validate_config_patch({"selected_classes_text": ""})
+
+        self.assertEqual(clean["selected_classes_text"], "")
+
     def test_theme_fields_are_removed_from_web_schema(self):
         schema = {item["key"]: item for item in mobile_control_schema()}
 
@@ -405,7 +410,7 @@ class MobileControlServerTest(unittest.TestCase):
         self.assertIn('pendingValues.set("selected_classes_text", text);', body)
         self.assertIn('JSON.stringify({selected_classes_text: text})', body)
         self.assertIn("if (serial !== classPatchSerial) return;", body)
-        self.assertIn("checkbox.checked = true;", body)
+        self.assertNotIn("checkbox.checked = true;", body)
         self.assertIn('state.config = {...state.config, selected_classes_text: next};', body)
 
 

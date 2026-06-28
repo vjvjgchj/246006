@@ -261,8 +261,6 @@ def _coerce_class_csv(value):
         if parsed < 0 or parsed > 999:
             raise ValueError("selected_classes_text class ids must be 0..999")
         clean.append(str(parsed))
-    if not clean:
-        raise ValueError("selected_classes_text must contain at least one class id")
     return ",".join(dict.fromkeys(clean))
 
 
@@ -1509,7 +1507,7 @@ Quantum</h1>
       }, 120));
     }
     async function commitClassSelection(value) {
-      const text = String(value || "0").split(",").map(item => item.trim()).filter(Boolean).join(",") || "0";
+      const text = String(value ?? "").split(",").map(item => item.trim()).filter(Boolean).join(",");
       const serial = ++classPatchSerial;
       pendingValues.set("selected_classes_text", text);
       clearTimeout(pending.get("selected_classes_text"));
@@ -1654,8 +1652,8 @@ Quantum</h1>
       return listId;
     }
     function parseClassItems() {
-      const selectedText = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text || "0");
-      const selected = new Set(String(selectedText || "0").split(",").map(item => item.trim()).filter(Boolean));
+      const selectedText = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text ?? "");
+      const selected = new Set(String(selectedText ?? "").split(",").map(item => item.trim()).filter(Boolean));
       const lines = String(state?.model?.availableClassesText || "").split(/\r?\n/).map(item => item.trim()).filter(Boolean);
       const fallbackIds = [...selected, ...Array.from({length: 80}, (_, index) => String(index))];
       const classSource = lines.length ? lines : Array.from(new Set(fallbackIds)).map(id => `${id} - class_${id}`);
@@ -1665,7 +1663,7 @@ Quantum</h1>
         return {
           id: classId || String(index),
           label: item,
-          checked: selected.size ? selected.has(classId) : index === 0,
+          checked: selected.has(classId),
         };
       });
     }
@@ -1684,8 +1682,7 @@ Quantum</h1>
           const values = Array.from(target.querySelectorAll("input[data-class-id]:checked"))
             .map(input => input.dataset.classId)
             .filter(Boolean);
-          const next = values.length ? values.join(",") : item.id;
-          if (!values.length) checkbox.checked = true;
+          const next = values.join(",");
           const hidden = $("selectedClassesHidden");
           if (hidden) hidden.value = next;
           if (state?.config) state.config = {...state.config, selected_classes_text: next};
@@ -1697,7 +1694,7 @@ Quantum</h1>
         target.appendChild(label);
       }
       const hidden = $("selectedClassesHidden");
-      if (hidden) hidden.value = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text || "0");
+      if (hidden) hidden.value = pendingConfigValue("selected_classes_text", state?.config?.selected_classes_text ?? "");
     }
     function renderField(field, options = {}) {
       const value = state?.config?.[field.key];

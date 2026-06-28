@@ -155,6 +155,33 @@ class WebPanelControllerTest(unittest.TestCase):
             finally:
                 controller.shutdown()
 
+    def test_empty_selected_classes_patch_writes_empty_runtime_target_classes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            (root / "models").mkdir()
+            engine_path = root / "models" / "hp.engine"
+            engine_path.write_bytes(b"engine")
+            (root / "gui_settings.json").write_text(
+                json.dumps({"selected_classes": ["0"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            controller.engine_path = str(engine_path)
+            controller.class_model.set_items(["0 - head", "1 - body"], ["0"])
+            try:
+                state = controller.update_handler({"selected_classes_text": ""})
+                config_text = (root / "runtime" / "config.txt").read_text(encoding="utf-8")
+                settings = json.loads((root / "gui_settings.json").read_text(encoding="utf-8"))
+
+                self.assertEqual(state["config"]["selected_classes_text"], "")
+                self.assertEqual(controller._selected_classes_list(), [])
+                self.assertEqual(controller.class_model.selected_ids(), [])
+                self.assertEqual(settings["selected_classes"], [])
+                self.assertIn("target_classes=\n", config_text)
+            finally:
+                controller.shutdown()
+
     def test_running_pipeline_writes_target_classes_from_latest_patch(self):
         class FakeRunningProcess:
             def poll(self):
