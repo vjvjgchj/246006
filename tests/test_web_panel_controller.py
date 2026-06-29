@@ -182,6 +182,23 @@ class WebPanelControllerTest(unittest.TestCase):
             finally:
                 controller.shutdown()
 
+    def test_model_class_refresh_does_not_restore_stale_selected_classes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "runtime").mkdir()
+            controller = WebPanelController(str(root), start_background_tasks=False)
+            try:
+                controller.class_model.set_items(["0 - enemy", "1 - teammate"], ["1"])
+                controller.selected_classes_text = ""
+
+                controller._apply_parsed_model_info(["0 - enemy", "1 - teammate"], "parsed")
+
+                self.assertEqual(controller.selected_classes_text, "")
+                self.assertEqual(controller._selected_classes_list(), [])
+                self.assertEqual(controller.class_model.selected_ids(), [])
+            finally:
+                controller.shutdown()
+
     def test_running_pipeline_writes_target_classes_from_latest_patch(self):
         class FakeRunningProcess:
             def poll(self):

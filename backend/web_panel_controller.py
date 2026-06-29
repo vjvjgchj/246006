@@ -1022,16 +1022,11 @@ class WebPanelController:
             if part and part.isdigit() and part not in seen:
                 values.append(part)
                 seen.add(part)
-        if values:
-            return values
-        if self.class_model.row_count() > 0:
-            selected = [item for item in self.class_model.selected_ids() if str(item).isdigit()]
-            if selected:
-                return selected
         return values
 
     def _sync_selected_classes_text(self):
         self.selected_classes_text = ",".join(self._selected_classes_list())
+        self.class_model.set_checked_from_csv(self.selected_classes_text)
 
     def _class_options_for_display(self, options):
         clean = [str(option).strip() for option in (options or []) if str(option).strip()]

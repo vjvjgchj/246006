@@ -1,6 +1,6 @@
 {
-  "version": "2026.06.29.3",
-  "notes": "fix two-class anchor-free model layout when only target class 0 is selected",
+  "version": "2026.06.29.4",
+  "notes": "simplify web target class selection to use config csv as the single source of truth",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -17,9 +17,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.29.3.zip",
-      "sha256": "9EA5A2A75F40CC2D1736A2D46A34E032C10AB627E7CC649BFDC8F2DD6FD05C74",
-      "size": 254680
+      "url": "../release_assets/neko-core-v2026.06.29.4.zip",
+      "sha256": "021ED785263EDA77366B9EE760CBC002958B0751AC4D089A464817FEB4FC34EB",
+      "size": 254628
     }
   ]
 }
