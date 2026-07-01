@@ -1,6 +1,6 @@
 {
-  "version": "2026.07.01.3",
-  "notes": "restore core-only license validation for QML panel",
+  "version": "2026.07.01.4",
+  "notes": "preserve empty QML target class selection",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -13,9 +13,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.07.01.3.zip",
-      "sha256": "8B0E55FAD4479B484BF4B926CAFE71A9137DF43B836434D6704ABC966B63CDD8",
-      "size": 295723
+      "url": "../release_assets/neko-core-v2026.07.01.4.zip",
+      "sha256": "26212ED581B99CAB1A86089D7F8169E771F43B8C9F1066632F7A046D9016884B",
+      "size": 295710
     }
   ]
 }
