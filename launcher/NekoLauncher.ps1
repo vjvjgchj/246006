@@ -276,13 +276,19 @@ else {
 }
 
 if (-not $NoLaunch) {
-    $entry = Join-Path $InstallDir "6_run_web_panel.vbs"
+    $entry = Join-Path $InstallDir "6_run_qml_panel.vbs"
+    $fallbackEntry = Join-Path $InstallDir "6_run_web_panel.vbs"
     if (Test-Path -LiteralPath $entry -PathType Leaf) {
-        Write-Info "Launching web panel..."
+        Write-Info "Launching QML panel..."
         Start-Process -FilePath "wscript.exe" -ArgumentList @("`"$entry`"") -WorkingDirectory $InstallDir
+    }
+    elseif (Test-Path -LiteralPath $fallbackEntry -PathType Leaf) {
+        Write-Warn "QML panel entry not found, launching web fallback..."
+        Start-Process -FilePath "wscript.exe" -ArgumentList @("`"$fallbackEntry`"") -WorkingDirectory $InstallDir
     }
     else {
         Write-Warn "Panel entry not found: $entry"
+        Write-Warn "Fallback entry not found: $fallbackEntry"
         Write-Warn "Install may be package-only. Use a full package manifest for first install."
     }
 }

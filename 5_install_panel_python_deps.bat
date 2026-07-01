@@ -10,7 +10,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [INFO] Installing Python dependencies for the Neko Web panel from Tsinghua mirror ...
+echo [INFO] Installing Python dependencies for the Neko panel from Tsinghua mirror ...
 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn -r "%~dp0panel_requirements.txt"
 
 if errorlevel 1 (

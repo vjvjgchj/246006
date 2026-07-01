@@ -1,25 +1,17 @@
 {
-  "version": "2026.06.29.5",
-  "notes": "fix empty target_classes parsing so no selected class means no target lock",
+  "version": "2026.07.01.1",
+  "notes": "restore QML panel as main chain and keep web fallback",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
     "gui_settings.json"
   ],
-  "delete": [
-    "qml",
-    "backend/qml_bridge.py",
-    "6_run_qml_panel.vbs",
-    "run_panel_hidden.pyw",
-    "gui_qml_trial.py",
-    "keyauth_login.py"
-  ],
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.06.29.5.zip",
-      "sha256": "7F403B3C7A73EACB0C77A87DD951CFE9A7D352CF2D05CAA52BC451A15BFBB0FA",
-      "size": 253998
+      "url": "../release_assets/neko-core-v2026.07.01.1.zip",
+      "sha256": "77C1E3D444373123608489E20B47044A3A9211EA0E1BEFBE8DDA193A7315A34D",
+      "size": 298028
     }
   ]
 }

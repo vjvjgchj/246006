@@ -12,15 +12,16 @@ from backend.update_manager import sha256_file
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-class WebPanelLauncherTest(unittest.TestCase):
-    def test_launcher_prefers_web_panel_entry(self):
+class PanelLauncherTest(unittest.TestCase):
+    def test_launcher_prefers_qml_panel_entry_with_web_fallback(self):
         launcher = (PROJECT_ROOT / "NekoLauncher.ps1").read_text(encoding="utf-8")
 
+        self.assertIn("6_run_qml_panel.vbs", launcher)
         self.assertIn("6_run_web_panel.vbs", launcher)
-        self.assertNotIn("6_run_qml_panel.vbs", launcher)
+        self.assertLess(launcher.index("6_run_qml_panel.vbs"), launcher.index("6_run_web_panel.vbs"))
 
-    def test_retired_qml_entry_files_are_removed(self):
-        for retired in (
+    def test_qml_entry_files_are_present_for_main_chain(self):
+        for required in (
             "6_run_qml_panel.vbs",
             "run_panel_hidden.pyw",
             "gui_qml_trial.py",
@@ -28,8 +29,8 @@ class WebPanelLauncherTest(unittest.TestCase):
             "qml/Main.qml",
             "keyauth_login.py",
         ):
-            with self.subTest(retired=retired):
-                self.assertFalse((PROJECT_ROOT / retired).exists())
+            with self.subTest(required=required):
+                self.assertTrue((PROJECT_ROOT / required).exists())
 
     def test_web_entry_is_pure_python_controller(self):
         hidden = (PROJECT_ROOT / "run_web_panel_hidden.pyw").read_text(encoding="utf-8")
@@ -38,23 +39,24 @@ class WebPanelLauncherTest(unittest.TestCase):
         self.assertNotIn("PySide6", hidden)
         self.assertNotIn("QmlBridge", hidden)
 
-    def test_web_entry_cleans_retired_qml_paths(self):
+    def test_web_entry_does_not_delete_qml_main_chain(self):
         hidden = (PROJECT_ROOT / "run_web_panel_hidden.pyw").read_text(encoding="utf-8")
 
-        self.assertIn("_cleanup_retired_qml_paths", hidden)
-        self.assertIn('"qml"', hidden)
-        self.assertIn('"backend", "qml_bridge.py"', hidden)
+        self.assertNotIn("_cleanup_retired_qml_paths", hidden)
+        self.assertNotIn("Removed retired QML", hidden)
 
-    def test_manifest_generator_adds_web_only_delete_list(self):
+    def test_manifest_generator_keeps_qml_by_default(self):
         generator = (PROJECT_ROOT / "tools" / "make_github_update_manifest.py").read_text(encoding="utf-8")
 
-        self.assertIn("DEFAULT_DELETE", generator)
+        self.assertIn("WEB_ONLY_DELETE", generator)
+        self.assertIn("--web-only-delete", generator)
         self.assertIn('"qml"', generator)
         self.assertIn('"backend/qml_bridge.py"', generator)
         self.assertIn('"6_run_qml_panel.vbs"', generator)
         self.assertIn('"keyauth_login.py"', generator)
+        self.assertNotIn("--no-web-only-delete", generator)
 
-    def test_powershell_launcher_applies_web_only_delete_list(self):
+    def test_powershell_launcher_applies_explicit_delete_list(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             install = tmp_path / "install"

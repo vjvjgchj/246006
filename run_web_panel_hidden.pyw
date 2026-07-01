@@ -1,5 +1,4 @@
 import os
-import shutil
 import sys
 import time
 import traceback
@@ -30,31 +29,6 @@ def _show_error(message):
         pass
 
 
-def _cleanup_retired_qml_paths(root, log):
-    retired_paths = [
-        "qml",
-        os.path.join("backend", "qml_bridge.py"),
-        "6_run_qml_panel.vbs",
-        "run_panel_hidden.pyw",
-        "gui_qml_trial.py",
-        "keyauth_login.py",
-    ]
-    for relative in retired_paths:
-        target = os.path.abspath(os.path.join(root, relative))
-        try:
-            if os.path.commonpath([root, target]) != root:
-                print(f"[WARN] Skip unsafe retired path: {relative}", file=log)
-                continue
-            if os.path.isdir(target):
-                shutil.rmtree(target)
-                print(f"[INFO] Removed retired QML directory: {relative}", file=log)
-            elif os.path.isfile(target):
-                os.remove(target)
-                print(f"[INFO] Removed retired QML file: {relative}", file=log)
-        except Exception as exc:
-            print(f"[WARN] Failed to remove retired QML path {relative}: {exc}", file=log)
-
-
 def main():
     root = _project_root()
     os.chdir(root)
@@ -69,7 +43,6 @@ def main():
         print(f"Root:   {root}")
 
         try:
-            _cleanup_retired_qml_paths(root, log)
             from backend.web_panel_controller import WebPanelController
 
             controller = WebPanelController(root)

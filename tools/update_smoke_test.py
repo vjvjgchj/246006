@@ -29,6 +29,10 @@ def main() -> int:
         with zipfile.ZipFile(release_package, "w") as archive:
             archive.writestr("runtime/TRT_ZeroCopy_Pipeline.exe", b"new release runtime exe")
             archive.writestr("backend/web_panel_controller.py", "new web controller")
+            archive.writestr("backend/qml_bridge.py", "new qml bridge")
+            archive.writestr("qml/Main.qml", "new qml")
+            archive.writestr("6_run_qml_panel.vbs", "qml launcher")
+            archive.writestr("run_panel_hidden.pyw", "qml hidden launcher")
         (project / "qml").mkdir(parents=True)
         (project / "qml" / "Main.qml").write_text("legacy qml", encoding="utf-8")
         (project / "backend").mkdir(parents=True, exist_ok=True)
@@ -47,7 +51,6 @@ def main() -> int:
                             "size": release_package.stat().st_size,
                         }
                     ],
-                    "delete": ["qml", "backend/qml_bridge.py", "6_run_qml_panel.vbs"],
                     "preserve": ["runtime/config.txt", "runtime/logi_driver.dll", "gui_settings.json"],
                 },
                 indent=2,
@@ -58,8 +61,10 @@ def main() -> int:
         backup_root = apply_manifest_update(project, manifest.as_uri())
         assert current_exe.read_bytes() == b"new release runtime exe"
         assert (project / "backend" / "web_panel_controller.py").read_text(encoding="utf-8") == "new web controller"
-        assert not (project / "qml").exists()
-        assert not (project / "backend" / "qml_bridge.py").exists()
+        assert (project / "qml" / "Main.qml").read_text(encoding="utf-8") == "new qml"
+        assert (project / "backend" / "qml_bridge.py").read_text(encoding="utf-8") == "new qml bridge"
+        assert (project / "6_run_qml_panel.vbs").read_text(encoding="utf-8") == "qml launcher"
+        assert (project / "run_panel_hidden.pyw").read_text(encoding="utf-8") == "qml hidden launcher"
         assert protected_driver.read_bytes() == b"protected driver"
         assert (backup_root / "runtime" / "TRT_ZeroCopy_Pipeline.exe").read_bytes() == b"old local runtime exe"
         assert (backup_root / "qml" / "Main.qml").read_text(encoding="utf-8") == "legacy qml"
