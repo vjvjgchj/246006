@@ -1,6 +1,6 @@
 {
-  "version": "2026.07.01.1",
-  "notes": "restore QML panel as main chain and keep web fallback",
+  "version": "2026.07.01.2",
+  "notes": "include keyauth dependency for QML panel startup",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -9,9 +9,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.07.01.1.zip",
-      "sha256": "77C1E3D444373123608489E20B47044A3A9211EA0E1BEFBE8DDA193A7315A34D",
-      "size": 298028
+      "url": "../release_assets/neko-core-v2026.07.01.2.zip",
+      "sha256": "654CA204EDA41DF25462706B7DC5D8A4C8A1C291C1D2E8634A8C1756D39F2A20",
+      "size": 301845
     }
   ]
 }

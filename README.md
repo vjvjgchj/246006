@@ -7,6 +7,7 @@ This directory is the packaged Neko panel/runtime workspace. The active panel is
 - `6_run_qml_panel.vbs`: launches the QML panel without a console window.
 - `run_panel_hidden.pyw`: QML panel bootstrapper.
 - `gui_qml_trial.py`: QML application entry.
+- `keyauth.py` and `keyauth_login.py`: QML login/auth dependency files.
 - `qml/Main.qml`: QML user interface.
 - `backend/qml_bridge.py`: QML bridge that writes runtime config, validates capabilities, and launches the runtime executable.
 - `6_run_web_panel.vbs`: optional Web fallback entry.
@@ -33,6 +34,7 @@ QML is the main chain. Do not add these paths to `delete[]` unless you are inten
 - `6_run_qml_panel.vbs`
 - `run_panel_hidden.pyw`
 - `gui_qml_trial.py`
+- `keyauth.py`
 - `keyauth_login.py`
 
 Update packages should preserve customer-local files such as `runtime/config.txt`, `runtime/logi_driver.dll`, and `gui_settings.json`.

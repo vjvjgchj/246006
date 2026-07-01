@@ -16,6 +16,7 @@ WEB_ONLY_DELETE = [
     "6_run_qml_panel.vbs",
     "run_panel_hidden.pyw",
     "gui_qml_trial.py",
+    "keyauth.py",
     "keyauth_login.py",
 ]
 
