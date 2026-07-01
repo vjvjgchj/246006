@@ -36,8 +36,6 @@ python tools\make_update_package.py `
   --include 6_run_qml_panel.vbs `
   --include run_panel_hidden.pyw `
   --include gui_qml_trial.py `
-  --include keyauth.py `
-  --include keyauth_login.py `
   --include 6_run_web_panel.vbs `
   --include run_web_panel_hidden.pyw `
   --include NekoLauncher.ps1 `
@@ -97,5 +95,3 @@ That explicit rollback removes:
 - `6_run_qml_panel.vbs`
 - `run_panel_hidden.pyw`
 - `gui_qml_trial.py`
-- `keyauth.py`
-- `keyauth_login.py`

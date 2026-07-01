@@ -9,7 +9,8 @@ active runtime package, not as the authoritative C++ core source tree.
 - `E:\4.29\429\neko\backend\qml_bridge.py` is the active QML panel backend. It writes runtime config, validates `--capabilities`, and launches the runtime executable.
 - `E:\4.29\429\neko\qml\Main.qml` is the active QML UI.
 - `E:\4.29\429\neko\backend\web_panel_controller.py` and `E:\4.29\429\neko\backend\mobile_control_server.py` are retained as a Web fallback/diagnostic path, not the default main chain.
-- Do not delete `backend\qml_bridge.py`, `qml\Main.qml`, `6_run_qml_panel.vbs`, `run_panel_hidden.pyw`, `gui_qml_trial.py`, `keyauth.py`, or `keyauth_login.py` from normal update packages. Only remove them when the user explicitly asks for a Web-only rollback.
+- Do not delete `backend\qml_bridge.py`, `qml\Main.qml`, `6_run_qml_panel.vbs`, `run_panel_hidden.pyw`, or `gui_qml_trial.py` from normal update packages. Only remove them when the user explicitly asks for a Web-only rollback.
+- The QML panel must not prompt for card-key login at startup. License/card-key validation belongs to the runtime core when launching inference.
 - `E:\4.29\429\neko\runtime` is the directory the panel actually runs from.
 - `E:\4.29\429\neko\runtime\config.txt` is the runtime config consumed by the executable.
 - `E:\4.29\429\neko\gui_settings.json` is panel state only; do not treat it as the runtime's final source of truth.

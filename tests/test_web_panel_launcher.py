@@ -25,13 +25,17 @@ class PanelLauncherTest(unittest.TestCase):
             "6_run_qml_panel.vbs",
             "run_panel_hidden.pyw",
             "gui_qml_trial.py",
-            "keyauth.py",
             "backend/qml_bridge.py",
             "qml/Main.qml",
-            "keyauth_login.py",
         ):
             with self.subTest(required=required):
                 self.assertTrue((PROJECT_ROOT / required).exists())
+
+    def test_qml_entry_does_not_prompt_for_keyauth(self):
+        entry = (PROJECT_ROOT / "gui_qml_trial.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("keyauth_login", entry)
+        self.assertNotIn("show_login", entry)
 
     def test_web_entry_is_pure_python_controller(self):
         hidden = (PROJECT_ROOT / "run_web_panel_hidden.pyw").read_text(encoding="utf-8")
@@ -54,15 +58,16 @@ class PanelLauncherTest(unittest.TestCase):
         self.assertIn('"qml"', generator)
         self.assertIn('"backend/qml_bridge.py"', generator)
         self.assertIn('"6_run_qml_panel.vbs"', generator)
-        self.assertIn('"keyauth.py"', generator)
-        self.assertIn('"keyauth_login.py"', generator)
         self.assertNotIn("--no-web-only-delete", generator)
 
-    def test_stable_qml_package_contains_keyauth_dependency(self):
+    def test_stable_qml_package_does_not_include_panel_keyauth_prompt(self):
         manifest_path = PROJECT_ROOT / "updates" / "stable.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         package_url = manifest["packages"][0]["url"]
-        self.assertNotIn("delete", manifest)
+        self.assertEqual(set(manifest.get("delete", [])), {"keyauth.py", "keyauth_login.py"})
+        self.assertNotIn("qml", manifest.get("delete", []))
+        self.assertNotIn("backend/qml_bridge.py", manifest.get("delete", []))
+        self.assertNotIn("6_run_qml_panel.vbs", manifest.get("delete", []))
         self.assertFalse(package_url.startswith("http"), package_url)
 
         package_path = (manifest_path.parent / package_url).resolve()
@@ -70,9 +75,9 @@ class PanelLauncherTest(unittest.TestCase):
         with zipfile.ZipFile(package_path, "r") as archive:
             names = set(archive.namelist())
 
-        self.assertIn("keyauth.py", names)
-        self.assertIn("keyauth_login.py", names)
         self.assertIn("gui_qml_trial.py", names)
+        self.assertNotIn("keyauth.py", names)
+        self.assertNotIn("keyauth_login.py", names)
 
     def test_powershell_launcher_applies_explicit_delete_list(self):
         with tempfile.TemporaryDirectory() as tmp:

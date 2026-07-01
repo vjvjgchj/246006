@@ -132,8 +132,6 @@ $rootFiles = @(
     "run_panel_hidden.pyw",
     "run_web_panel_hidden.pyw",
     "gui_qml_trial.py",
-    "keyauth.py",
-    "keyauth_login.py",
     "gui_settings.json",
     "panel_requirements.txt",
     "NekoLauncher.bat",

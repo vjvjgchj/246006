@@ -1,17 +1,21 @@
 {
-  "version": "2026.07.01.2",
-  "notes": "include keyauth dependency for QML panel startup",
+  "version": "2026.07.01.3",
+  "notes": "restore core-only license validation for QML panel",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
     "gui_settings.json"
   ],
+  "delete": [
+    "keyauth.py",
+    "keyauth_login.py"
+  ],
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.07.01.2.zip",
-      "sha256": "654CA204EDA41DF25462706B7DC5D8A4C8A1C291C1D2E8634A8C1756D39F2A20",
-      "size": 301845
+      "url": "../release_assets/neko-core-v2026.07.01.3.zip",
+      "sha256": "8B0E55FAD4479B484BF4B926CAFE71A9137DF43B836434D6704ABC966B63CDD8",
+      "size": 295723
     }
   ]
 }
