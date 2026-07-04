@@ -1,6 +1,6 @@
 {
-  "version": "2026.07.01.4",
-  "notes": "preserve empty QML target class selection",
+  "version": "2026.07.04.1",
+  "notes": "auto elevate QML panel and rebuild GHUB virtual mouse before launch",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -13,9 +13,9 @@
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.07.01.4.zip",
-      "sha256": "26212ED581B99CAB1A86089D7F8169E771F43B8C9F1066632F7A046D9016884B",
-      "size": 295710
+      "url": "../release_assets/neko-core-v2026.07.04.1.zip",
+      "sha256": "CFEF1D03EA2D5160DC42F8CE56E401C636D6B2294DEBCC35569B6AB0D61A5B1C",
+      "size": 296935
     }
   ]
 }

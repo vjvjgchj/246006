@@ -471,6 +471,119 @@ class QmlBridge(QObject):
         combined_output = f"{result.stdout}\n{result.stderr}".upper()
         return "LGHUBDEVICE\\VID_046D&PID_C231" in combined_output
 
+    def _find_lghub_virtual_driver_manager(self) -> str:
+        if os.name != "nt":
+            return ""
+        program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+        depots_root = Path(program_data) / "LGHUB" / "depots"
+        if not depots_root.exists():
+            return ""
+        try:
+            candidates = sorted(
+                depots_root.rglob("driver_hid_virtual/virtual_driver_manager.exe"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception as exc:
+            self._append_log(f"[WARN] 查找 GHUB 虚拟驱动管理器失败: {exc}")
+            return ""
+        return str(candidates[0]) if candidates else ""
+
+    def _run_lghub_virtual_driver_manager(self, manager_path: str, argument: str) -> bool:
+        try:
+            result = subprocess.run(
+                [manager_path, argument],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                creationflags=self._hidden_process_flags(),
+            )
+        except Exception as exc:
+            self._append_log(f"[WARN] GHUB 虚拟驱动管理器执行失败 {argument}: {exc}")
+            return False
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            suffix = f": {detail}" if detail else ""
+            self._append_log(
+                f"[WARN] GHUB 虚拟驱动管理器返回异常 {argument}: exit={result.returncode}{suffix}"
+            )
+            return False
+        return True
+
+    def _trigger_pnp_device_scan(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["pnputil", "/scan-devices"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                creationflags=self._hidden_process_flags(),
+            )
+        except Exception as exc:
+            self._append_log(f"[WARN] pnputil 设备扫描失败: {exc}")
+            return False
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            suffix = f": {detail}" if detail else ""
+            self._append_log(f"[WARN] pnputil 设备扫描返回异常: exit={result.returncode}{suffix}")
+            return False
+        self._append_log("[INFO] 已触发 pnputil 设备扫描。")
+        return True
+
+    def _ensure_lghub_virtual_mouse_ready(self) -> bool:
+        if os.name != "nt":
+            return True
+
+        is_elevated = self._is_process_elevated()
+        if self._has_present_ghub_virtual_mouse():
+            if is_elevated:
+                self._append_log("[INFO] LGHUB 启动预检: 当前面板具备管理员权限。")
+            else:
+                self._append_log(
+                    "[WARN] LGHUB 启动预检: 当前面板不是管理员。虽然 PID_C231 已存在，"
+                    "但若虚拟鼠标掉失，自动修复可能失败。"
+                )
+            self._append_log("[INFO] LGHUB 启动预检: Logitech G HUB Virtual Mouse 已存在。")
+            return True
+
+        if not is_elevated:
+            self._append_log(
+                "[ERROR] LGHUB 启动预检失败: 未检测到 Logitech G HUB Virtual Mouse "
+                "(PID_C231)，且当前面板不是管理员。请以管理员身份运行面板后重试。"
+            )
+            return False
+
+        self._append_log("[INFO] LGHUB 启动预检: 当前面板具备管理员权限。")
+        manager_path = self._find_lghub_virtual_driver_manager()
+        if not manager_path:
+            self._append_log(
+                "[ERROR] LGHUB 虚拟驱动修复失败: 找不到 virtual_driver_manager.exe。"
+            )
+            return False
+
+        self._append_log("[WARN] 未检测到 Logitech G HUB Virtual Mouse，开始重建 GHUB 虚拟驱动。")
+        self._run_lghub_virtual_driver_manager(manager_path, "--uninstall")
+        time.sleep(1.0)
+        if not self._run_lghub_virtual_driver_manager(manager_path, "--install"):
+            self._append_log("[ERROR] GHUB 虚拟驱动安装失败，已阻止启动推理核心。")
+            return False
+        time.sleep(1.0)
+        self._trigger_pnp_device_scan()
+
+        for attempt in range(24):
+            time.sleep(0.25)
+            if self._has_present_ghub_virtual_mouse():
+                self._append_log("[INFO] Logitech G HUB Virtual Mouse 已恢复。")
+                return True
+            if attempt in {5, 11, 17}:
+                self._trigger_pnp_device_scan()
+
+        self._append_log(
+            "[ERROR] GHUB 虚拟驱动修复后仍未检测到 Logitech G HUB Virtual Mouse，"
+            "已阻止启动推理核心。"
+        )
+        return False
+
     def _handle_pipeline_output_line(self, line: str):
         if line.strip():
             self._append_log(line)
@@ -2264,22 +2377,8 @@ class QmlBridge(QObject):
         if self._is_pipeline_running():
             self._append_log("[WARN] 当前已有推理核心在运行。")
             return
-        if self.lghub_enabled:
-            is_elevated = self._is_process_elevated()
-            ghub_mouse_present = self._has_present_ghub_virtual_mouse()
-            if is_elevated:
-                self._append_log("[INFO] LGHUB 启动预检: 当前面板具备管理员权限。")
-            elif ghub_mouse_present:
-                self._append_log(
-                    "[WARN] LGHUB 启动预检: 当前面板不是管理员。虽然 PID_C231 已存在，"
-                    "但若虚拟鼠标掉失，自动修复可能失败。"
-                )
-            else:
-                self._append_log(
-                    "[ERROR] LGHUB 启动预检失败: 未检测到 Logitech G HUB Virtual Mouse "
-                    "(PID_C231)，且当前面板不是管理员。请以管理员身份运行面板后重试。"
-                )
-                return
+        if self.lghub_enabled and not self._ensure_lghub_virtual_mouse_ready():
+            return
         if not self._write_pipeline_config():
             return
         engine_path = self.engine_path

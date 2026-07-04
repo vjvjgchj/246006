@@ -31,6 +31,16 @@ class PanelLauncherTest(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertTrue((PROJECT_ROOT / required).exists())
 
+    def test_qml_vbs_entry_auto_elevates_before_launching_panel(self):
+        entry = (PROJECT_ROOT / "6_run_qml_panel.vbs").read_text(encoding="utf-8")
+
+        self.assertIn("Function IsAdministrator", entry)
+        self.assertIn("Shell.Application", entry)
+        self.assertIn("ShellExecute", entry)
+        self.assertIn("WScript.ScriptFullName", entry)
+        self.assertIn('"runas"', entry)
+        self.assertLess(entry.index("If Not IsAdministrator() Then"), entry.index("shell.Run cmd"))
+
     def test_qml_entry_does_not_prompt_for_keyauth(self):
         entry = (PROJECT_ROOT / "gui_qml_trial.py").read_text(encoding="utf-8")
 

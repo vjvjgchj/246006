@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 try:
     from PySide6.QtCore import QCoreApplication
@@ -60,6 +61,71 @@ class QmlBridgeClassSelectionTest(unittest.TestCase):
                 self.assertEqual(bridge.class_model.selected_ids(), [])
                 self.assertEqual(settings["selected_classes"], [])
                 self.assertIn("target_classes=\n", config_text)
+            finally:
+                bridge.shutdown()
+
+    def test_lghub_missing_virtual_mouse_is_rebuilt_before_pipeline_start(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = self._bridge(root)
+            calls = []
+            present_results = iter([False, False, True])
+            try:
+                bridge._has_present_ghub_virtual_mouse = lambda: next(present_results)
+                bridge._is_process_elevated = lambda: True
+                bridge._find_lghub_virtual_driver_manager = (
+                    lambda: r"C:\ProgramData\LGHUB\depots\741892\driver_hid_virtual\virtual_driver_manager.exe"
+                )
+                bridge._run_lghub_virtual_driver_manager = (
+                    lambda manager, arg: calls.append(("manager", arg)) or True
+                )
+                bridge._trigger_pnp_device_scan = lambda: calls.append(("scan", "")) or True
+
+                with patch("backend.qml_bridge.time.sleep", lambda _seconds: None):
+                    self.assertTrue(bridge._ensure_lghub_virtual_mouse_ready())
+
+                self.assertEqual(
+                    calls,
+                    [
+                        ("manager", "--uninstall"),
+                        ("manager", "--install"),
+                        ("scan", ""),
+                    ],
+                )
+                self.assertTrue(
+                    any("Logitech G HUB Virtual Mouse 已恢复" in line for line in bridge._log_lines)
+                )
+            finally:
+                bridge.shutdown()
+
+    def test_lghub_missing_virtual_mouse_blocks_start_without_admin(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = self._bridge(root)
+            try:
+                bridge._has_present_ghub_virtual_mouse = lambda: False
+                bridge._is_process_elevated = lambda: False
+                bridge._find_lghub_virtual_driver_manager = (
+                    lambda: self.fail("repair manager should not be searched without admin")
+                )
+
+                self.assertFalse(bridge._ensure_lghub_virtual_mouse_ready())
+                self.assertTrue(any("请以管理员身份运行面板" in line for line in bridge._log_lines))
+            finally:
+                bridge.shutdown()
+
+    def test_start_pipeline_stops_before_writing_config_when_lghub_repair_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = self._bridge(root)
+            try:
+                bridge.lghub_enabled = True
+                bridge._ensure_lghub_virtual_mouse_ready = lambda: False
+                bridge._write_pipeline_config = (
+                    lambda: self.fail("config should not be written when GHUB repair fails")
+                )
+
+                bridge.startPipeline({})
             finally:
                 bridge.shutdown()
 
