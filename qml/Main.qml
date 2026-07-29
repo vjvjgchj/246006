@@ -10,20 +10,25 @@ ApplicationWindow {
     minimumWidth: 1120
     minimumHeight: 760
     visible: true
-    title: "TensorRT Quantum Console - QML Trial"
+    title: "TensorRT Quantum Console"
     color: backend.surfaceAltColor
     property bool compactLayout: width < 1280
     property int shellMargin: compactLayout ? 10 : 14
     property int shellSpacing: compactLayout ? 10 : 14
     property int sidebarPreferredWidth: compactLayout ? 238 : 270
-    property int cardRadius: compactLayout ? 20 : 24
+    property int cardRadius: 8
     property int compactValueWidth: 112
     property int formLabelWidth: 82
     property int visualMiniCardMinHeight: compactLayout ? 130 : 146
     property int paramGroupMinHeight: compactLayout ? 188 : 204
     property int keyDisplayWidth: 156
     property int keyActionWidth: 108
+    property int activeWorkspace: 0
     property real cardFillAlpha: Math.max(0.0, Math.min(1.0, backend.cardOpacityValue / 100.0))
+    property real panelFillAlpha: Math.max(0.48, Math.min(0.92, window.cardFillAlpha + 0.36))
+    property color panelBorderColor: window.withAlpha(backend.accent2Color, 0.24)
+    property color sectionBorderColor: window.withAlpha(backend.accent2Color, 0.38)
+    property color controlBorderColor: window.withAlpha(backend.accent2Color, 0.58)
     property real controlFillAlpha: Math.max(0.18, Math.min(0.72, window.cardFillAlpha * 0.72))
     property real controlReadOnlyAlpha: Math.max(0.14, Math.min(0.64, window.cardFillAlpha * 0.58))
     property real controlFocusAlpha: Math.max(0.28, Math.min(0.82, window.cardFillAlpha * 0.82))
@@ -163,6 +168,15 @@ ApplicationWindow {
             return 2
         return 1
     }
+
+    function resetPanelScrollPositions() {
+        if (mainScroll.contentItem)
+            mainScroll.contentItem.contentY = 0
+        if (sidebarScroll.contentItem)
+            sidebarScroll.contentItem.contentY = 0
+    }
+
+    onActiveWorkspaceChanged: Qt.callLater(resetPanelScrollPositions)
 
     component SoftHelpPopup: Item {
         id: popup
@@ -342,7 +356,7 @@ ApplicationWindow {
             elide: Text.ElideRight
         }
         background: Rectangle {
-            radius: 12
+            radius: 7
             border.width: 1
             border.color: control.down ? backend.accent2Color : backend.accentColor
             color: control.down
@@ -401,9 +415,9 @@ ApplicationWindow {
             elide: Text.ElideRight
         }
         background: Rectangle {
-            radius: 12
+            radius: 7
             border.width: 1
-            border.color: control.down ? backend.accentColor : backend.accent2Color
+            border.color: control.down ? backend.accentColor : window.controlBorderColor
             color: control.down
                    ? Qt.darker(backend.surfaceColor, 1.15)
                    : control.hovered
@@ -438,6 +452,33 @@ ApplicationWindow {
                 secondaryButtonHelpTimer.stop()
                 secondaryButtonHelp.close()
             }
+        }
+    }
+
+    component WorkspaceButton: Button {
+        id: control
+        property bool active: false
+        implicitHeight: 38
+        implicitWidth: 132
+        font.pixelSize: 13
+        contentItem: Text {
+            text: control.text
+            color: control.active ? backend.textColor : backend.mutedColor
+            font.pixelSize: control.font.pixelSize
+            font.bold: control.active
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+        background: Rectangle {
+            radius: 7
+            color: control.active
+                   ? window.withAlpha(backend.accentColor, 0.20)
+                   : control.hovered
+                     ? window.withAlpha(backend.surfaceColor, 0.48)
+                     : "transparent"
+            border.width: control.active ? 1 : 0
+            border.color: window.withAlpha(backend.accentColor, 0.72)
         }
     }
 
@@ -650,13 +691,13 @@ ApplicationWindow {
         }
         background: Rectangle {
             id: bgRect
-            radius: 12
+            radius: 7
             border.width: field.activeFocus ? 1.5 : 1
             border.color: field.activeFocus
                           ? backend.accentColor
                           : control.hoverActive
-                            ? Qt.lighter(backend.accent2Color, 1.15)
-                            : backend.accent2Color
+                            ? window.withAlpha(backend.accent2Color, 0.78)
+                            : window.controlBorderColor
             color: field.activeFocus
                    ? window.inputFillFocusColor
                    : control.readOnly
@@ -665,7 +706,7 @@ ApplicationWindow {
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
-                radius: 11
+                radius: 6
                 color: "#ffffff"
                 opacity: field.activeFocus ? 0.028 : control.readOnly ? 0.010 : 0.014
             }
@@ -677,7 +718,7 @@ ApplicationWindow {
                 anchors.rightMargin: 1
                 anchors.topMargin: 1
                 height: Math.max(1, Math.round(parent.height * 0.38))
-                radius: 11
+                radius: 6
                 color: "#ffffff"
                 opacity: field.activeFocus ? 0.018 : control.readOnly ? 0.006 : 0.010
             }
@@ -707,18 +748,18 @@ ApplicationWindow {
         verticalAlignment: TextInput.AlignVCenter
         background: Rectangle {
             id: bgRect
-            radius: 12
+            radius: 7
             border.width: control.activeFocus ? 1.5 : 1
             border.color: control.activeFocus
                           ? backend.accentColor
                           : control.hovered
-                            ? Qt.lighter(backend.accent2Color, 1.15)
-                            : backend.accent2Color
+                            ? window.withAlpha(backend.accent2Color, 0.78)
+                            : window.controlBorderColor
             color: control.activeFocus ? window.inputFillFocusColor : window.inputFillColor
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
-                radius: 11
+                radius: 6
                 color: "#ffffff"
                 opacity: control.activeFocus ? 0.028 : 0.014
             }
@@ -796,18 +837,18 @@ ApplicationWindow {
         }
         background: Rectangle {
             id: comboBg
-            radius: 12
+            radius: 7
             border.width: control.visualFocus ? 1.5 : 1
             border.color: control.visualFocus
                           ? backend.accentColor
                           : control.hovered
-                            ? Qt.lighter(backend.accent2Color, 1.15)
-                            : backend.accent2Color
+                            ? window.withAlpha(backend.accent2Color, 0.78)
+                            : window.controlBorderColor
             color: control.visualFocus ? window.inputFillFocusColor : window.inputReadOnlyFillColor
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
-                radius: 11
+                radius: 6
                 color: "#ffffff"
                 opacity: control.visualFocus ? 0.022 : 0.008
             }
@@ -818,14 +859,14 @@ ApplicationWindow {
             padding: 4
             background: Rectangle {
                 id: popupBg
-                radius: 12
+                radius: 7
                 color: window.inputPopupFillColor
-                border.color: backend.accent2Color
+                border.color: window.controlBorderColor
                 border.width: 1
                 Rectangle {
                     anchors.fill: parent
                     anchors.margins: 1
-                    radius: 11
+                    radius: 6
                     color: "#ffffff"
                     opacity: 0.007
                 }
@@ -870,15 +911,15 @@ ApplicationWindow {
         indicator: Rectangle {
             implicitWidth: 18
             implicitHeight: 18
-            radius: 6
+            radius: 4
             border.width: 1
-            border.color: control.checked ? backend.accentColor : backend.accent2Color
+            border.color: control.checked ? backend.accentColor : window.controlBorderColor
             color: control.checked ? backend.accentColor : backend.surfaceAltColor
             Rectangle {
                 anchors.centerIn: parent
                 width: 8
                 height: 8
-                radius: 3
+                radius: 2
                 visible: control.checked
                 color: "#ffffff"
             }
@@ -917,14 +958,16 @@ ApplicationWindow {
             }
         }
         background: Rectangle {
-            radius: 16
+            radius: 6
             color: window.withAlpha(backend.surfaceAltColor, window.cardFillAlpha)
-            border.color: control.hoverActive ? Qt.lighter(backend.accent2Color, 1.18) : backend.accent2Color
+            border.color: control.hoverActive
+                          ? window.withAlpha(backend.accent2Color, 0.54)
+                          : window.sectionBorderColor
             border.width: 1
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
-                radius: 15
+                radius: 5
                 color: "#ffffff"
                 opacity: control.hoverActive ? 0.018 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
@@ -1088,8 +1131,10 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        activeWorkspace = 0
         syncFromBackend()
         refreshMonitorHistory()
+        Qt.callLater(resetPanelScrollPositions)
     }
 
     Connections {
@@ -1154,14 +1199,14 @@ ApplicationWindow {
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: true
-        opacity: 0.35
+        opacity: 0.22
     }
 
 
     Rectangle {
         anchors.fill: parent
-        color: "#000000"
-        opacity: backend.activeBackgroundModeValue === "image" ? 0.12 : 0.08
+        color: window.withAlpha("#000000",
+                                backend.activeBackgroundModeValue === "image" ? 0.38 : 0.16)
     }
 
     RowLayout {
@@ -1172,15 +1217,22 @@ ApplicationWindow {
         Rectangle {
             Layout.preferredWidth: window.sidebarPreferredWidth
             Layout.fillHeight: true
-            radius: 26
-            color: window.withAlpha(backend.sidebarColor, window.cardFillAlpha)
-            border.color: backend.accentColor
+            radius: 8
+            color: window.withAlpha(backend.sidebarColor, window.panelFillAlpha)
+            border.color: window.panelBorderColor
             border.width: 1
 
-            ColumnLayout {
+            ScrollView {
+                id: sidebarScroll
                 anchors.fill: parent
-                anchors.margins: 18
-                spacing: 12
+                anchors.margins: 12
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+
+                ColumnLayout {
+                    width: sidebarScroll.availableWidth
+                    spacing: 12
 
                 Label {
                     text: "TRT\nQuantum"
@@ -1200,7 +1252,7 @@ ApplicationWindow {
                     implicitHeight: statusCardLayout.implicitHeight + 24
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accent2Color
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -1294,7 +1346,7 @@ ApplicationWindow {
                     implicitHeight: updateCardLayout.implicitHeight + 24
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accentColor
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -1350,7 +1402,7 @@ ApplicationWindow {
                     implicitHeight: monitorCardLayout.implicitHeight + 26
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accent2Color
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -1466,40 +1518,113 @@ ApplicationWindow {
                     }
                 }
 
-                Item { Layout.fillHeight: true }
+                }
             }
         }
 
-        ScrollView {
-            id: mainScroll
+        Item {
+            id: workspaceLayout
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            ScrollBar.vertical.policy: ScrollBar.AsNeeded
-            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-            ScrollBar.vertical.interactive: true
+            Layout.minimumHeight: 0
 
-            Component.onCompleted: {
-                if (contentItem) {
-                    contentItem.boundsBehavior = Flickable.StopAtBounds
-                    contentItem.boundsMovement = Flickable.StopAtBounds
-                    contentItem.flickDeceleration = 9000
-                    contentItem.maximumFlickVelocity = 3400
-                    contentItem.pixelAligned = true
+            Rectangle {
+                id: workspaceNav
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 52
+                radius: 8
+                color: window.withAlpha(backend.surfaceColor, window.panelFillAlpha)
+                border.width: 1
+                border.color: window.panelBorderColor
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 6
+
+                    WorkspaceButton {
+                        text: "运行"
+                        active: window.activeWorkspace === 0
+                        onClicked: window.activeWorkspace = 0
+                    }
+                    WorkspaceButton {
+                        text: "模型与外观"
+                        active: window.activeWorkspace === 1
+                        onClicked: window.activeWorkspace = 1
+                    }
+                    WorkspaceButton {
+                        text: "日志"
+                        active: window.activeWorkspace === 2
+                        onClicked: window.activeWorkspace = 2
+                    }
+                    Item { Layout.fillWidth: true }
+                    Rectangle {
+                        Layout.preferredWidth: 108
+                        Layout.preferredHeight: 30
+                        radius: 7
+                        color: window.withAlpha(backend.pipelineRunning ? "#43C78A" : backend.surfaceAltColor,
+                                                backend.pipelineRunning ? 0.18 : 0.42)
+                        border.width: 1
+                        border.color: backend.pipelineRunning
+                                      ? window.withAlpha("#43C78A", 0.58)
+                                      : window.panelBorderColor
+                        RowLayout {
+                            anchors.centerIn: parent
+                            spacing: 7
+                            Rectangle {
+                                Layout.preferredWidth: 8
+                                Layout.preferredHeight: 8
+                                radius: 4
+                                color: backend.pipelineRunning ? "#43C78A" : backend.mutedColor
+                            }
+                            Label {
+                                text: backend.pipelineRunning ? "核心运行中" : "核心已停止"
+                                color: backend.pipelineRunning ? "#7CF2B5" : backend.mutedColor
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                        }
+                    }
                 }
             }
 
-            ColumnLayout {
-                width: mainScroll.availableWidth
-                spacing: window.compactLayout ? 10 : 12
+            ScrollView {
+                id: mainScroll
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: workspaceNav.bottom
+                anchors.bottom: fixedRunBar.top
+                anchors.topMargin: window.shellSpacing
+                anchors.bottomMargin: window.shellSpacing
+                clip: true
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.interactive: true
+
+                Component.onCompleted: {
+                    if (contentItem) {
+                        contentItem.boundsBehavior = Flickable.StopAtBounds
+                        contentItem.boundsMovement = Flickable.StopAtBounds
+                        contentItem.flickDeceleration = 9000
+                        contentItem.maximumFlickVelocity = 3400
+                        contentItem.pixelAligned = true
+                    }
+                }
+
+                ColumnLayout {
+                    width: mainScroll.availableWidth
+                    spacing: window.compactLayout ? 10 : 12
 
                 Rectangle {
                     Layout.fillWidth: true
+                    visible: window.activeWorkspace === 1
                     implicitHeight: visualCardLayout.implicitHeight + (window.compactLayout ? 24 : 30)
                     clip: true
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accent2Color
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -1657,11 +1782,12 @@ ApplicationWindow {
 
                 Rectangle {
                     Layout.fillWidth: true
+                    visible: window.activeWorkspace === 1
                     implicitHeight: buildCardLayout.implicitHeight + 32
                     clip: true
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accent2Color
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -1733,11 +1859,12 @@ ApplicationWindow {
 
                 Rectangle {
                     Layout.fillWidth: true
+                    visible: window.activeWorkspace === 0
                     implicitHeight: runCardLayout.implicitHeight + 32
                     clip: true
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accent2Color
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -2050,7 +2177,7 @@ ApplicationWindow {
                                         height: 30
                                         radius: 9
                                         color: window.listRowFillColor
-                                        border.color: backend.accent2Color
+                                        border.color: window.sectionBorderColor
                                         border.width: 1
 
                                         RowLayout {
@@ -2243,32 +2370,17 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-                            ThemedButton {
-                                text: backend.pipelineRunning ? "推理运行中..." : "启动极速推理"
-                                helpText: "按当前引擎、目标类别和参数配置启动推理与控制流程。"
-                                enabled: !backend.pipelineRunning
-                                onClicked: backend.startPipeline(window.collectSettings())
-                            }
-                            SecondaryButton {
-                                text: "停止推理"
-                                helpText: "停止当前推理进程，并中断相关运行状态。"
-                                enabled: backend.pipelineRunning
-                                onClicked: backend.stopPipeline()
-                            }
-                        }
                     }
                 }
 
                 Rectangle {
                     Layout.fillWidth: true
-                    implicitHeight: window.compactLayout ? 280 : 320
+                    visible: window.activeWorkspace === 2
+                    implicitHeight: Math.max(window.compactLayout ? 280 : 320, mainScroll.height - 2)
                     clip: true
                     radius: window.cardRadius
                     color: window.withAlpha(backend.surfaceColor, window.cardFillAlpha)
-                    border.color: backend.accent2Color
+                    border.color: window.panelBorderColor
                     border.width: 1
 
                     ColumnLayout {
@@ -2308,7 +2420,7 @@ ApplicationWindow {
                                 border.color: model.level === "error" ? "#8f3a4f"
                                               : model.level === "warn" ? "#8e6f2f"
                                               : model.level === "success" ? "#2c8a63"
-                                              : backend.accent2Color
+                                              : window.sectionBorderColor
                                 border.width: 1
                                 implicitHeight: logTextItem.implicitHeight + 18
 
@@ -2349,6 +2461,61 @@ ApplicationWindow {
                                 }
                             }
                         }
+                    }
+                }
+            }
+            }
+
+            // Fixed run bar
+            Rectangle {
+                id: fixedRunBar
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 64
+                z: 10
+                radius: 8
+                color: window.withAlpha(backend.surfaceColor, window.panelFillAlpha)
+                border.width: 1
+                border.color: window.panelBorderColor
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 10
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        spacing: 2
+                        Label {
+                            text: backend.pipelineRunning ? "推理核心正在运行" : "推理核心已停止"
+                            color: backend.textColor
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+                        HoverInfoLabel {
+                            Layout.fillWidth: true
+                            text: backend.statusEngineText
+                            fullText: backend.statusEngineText
+                            color: backend.mutedColor
+                        }
+                    }
+                    ThemedButton {
+                        Layout.preferredWidth: 156
+                        Layout.preferredHeight: 40
+                        text: backend.pipelineRunning ? "推理运行中..." : "启动极速推理"
+                        helpText: "按当前引擎、目标类别和参数配置启动推理与控制流程。"
+                        enabled: !backend.pipelineRunning
+                        onClicked: backend.startPipeline(window.collectSettings())
+                    }
+                    SecondaryButton {
+                        Layout.preferredWidth: 112
+                        Layout.preferredHeight: 40
+                        text: "停止推理"
+                        helpText: "停止当前推理进程，并中断相关运行状态。"
+                        enabled: backend.pipelineRunning
+                        onClicked: backend.stopPipeline()
                     }
                 }
             }
