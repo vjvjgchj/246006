@@ -1,6 +1,6 @@
 {
-  "version": "2026.07.04.1",
-  "notes": "auto elevate QML panel and rebuild GHUB virtual mouse before launch",
+  "version": "2026.07.29.1",
+  "notes": "优化 QML 面板工作区、固定运行栏、背景可读性和窄窗口布局",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -12,10 +12,15 @@
   ],
   "packages": [
     {
-      "name": "core",
-      "url": "../release_assets/neko-core-v2026.07.04.1.zip",
-      "sha256": "CFEF1D03EA2D5160DC42F8CE56E401C636D6B2294DEBCC35569B6AB0D61A5B1C",
-      "size": 296935
+      "name": "ui",
+      "url": "../release_assets/neko-ui-v2026.07.29.1.zip",
+      "sha256": "A6AED0AB3BBEC100FF8D878A44F8631BBD8589B12B14B882B73540D3A304C180",
+      "size": 16353
     }
-  ]
+  ],
+  "signature": {
+    "key_id": "neko-update-2026-01",
+    "algorithm": "RS256",
+    "value": "Word/3P7LUZBO1Xt6uaC71r/rFvKEIBAHenUhtdI6mSByvvRkHDTLTjON0CyB9ydkBLueOIwM6ztMhJd7rh7RD3MPeLUMXMD3IJSXqAmc4TllCa5BJ2p+Ii0QWNb/Cu9G6URKzeWbnN2pc9zd53VGWdAPH+6o1NbLu9QE9pVqz+f8oCCZkOdhsOeb0ghpo5Tv5jiP6wXkCe/XUGElVrximkwe7nniiUh+kkE916JoUIps98+QsLp38Cz/5sfw9kW9yG33BX35XX+FMOZwkFmI6XClnPMw/BpWkyDzSZ61dHNZZdSPbkbP5Py6rZ3miQWQ3v61fmGl0WMCuUX5SN35A=="
+  }
 }
