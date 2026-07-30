@@ -1,6 +1,6 @@
 {
-  "version": "2026.07.29.1",
-  "notes": "优化 QML 面板工作区、固定运行栏、背景可读性和窄窗口布局",
+  "version": "2026.07.31.1",
+  "notes": "补全 QML 主链路：管理员启动入口、隐藏启动器、QML 应用入口、面板后端与主界面",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -12,15 +12,15 @@
   ],
   "packages": [
     {
-      "name": "ui",
-      "url": "../release_assets/neko-ui-v2026.07.29.1.zip",
-      "sha256": "A6AED0AB3BBEC100FF8D878A44F8631BBD8589B12B14B882B73540D3A304C180",
-      "size": 16353
+      "name": "qml-panel",
+      "url": "../release_assets/neko-qml-panel-v2026.07.31.1.zip",
+      "sha256": "6F897ABEBB80A3302E24617E3592E34133893EA20FC89A10C1213290FF481BAA",
+      "size": 43981
     }
   ],
   "signature": {
     "key_id": "neko-update-2026-01",
     "algorithm": "RS256",
-    "value": "Word/3P7LUZBO1Xt6uaC71r/rFvKEIBAHenUhtdI6mSByvvRkHDTLTjON0CyB9ydkBLueOIwM6ztMhJd7rh7RD3MPeLUMXMD3IJSXqAmc4TllCa5BJ2p+Ii0QWNb/Cu9G6URKzeWbnN2pc9zd53VGWdAPH+6o1NbLu9QE9pVqz+f8oCCZkOdhsOeb0ghpo5Tv5jiP6wXkCe/XUGElVrximkwe7nniiUh+kkE916JoUIps98+QsLp38Cz/5sfw9kW9yG33BX35XX+FMOZwkFmI6XClnPMw/BpWkyDzSZ61dHNZZdSPbkbP5Py6rZ3miQWQ3v61fmGl0WMCuUX5SN35A=="
+    "value": "kzt0zPQzbw5FhQTafJ9vxhy4v3tn3HCNqSe5b3ecC/r/1lfiJ/9gqUkkhmygxrdYfuJVzUi/q0uVAlPIXIL7vrLiouzgMFyQEggL7jpkWCsRDEjQ+6toar30IW+YNO8zaUdfTcAmiFA6uaJg45opU0D2H2oQK195eY5vCpeVt6FWU0dLoPcPKRxZhvPZvwgKgN8RXFperaVVaKLEZtAjxLPTS+HBVHDECyh8NRhUUMMb4riPrzSr+0E9O38q0qF+4uz8nEDV2bqmyWqlJjLJiKf4ofiHOb85EcHbTVHNmsXPJL+TgP+3x7INWotSQj5zrF45aAmIpqBwufUwThQ6jg=="
   }
 }
