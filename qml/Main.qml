@@ -2294,8 +2294,8 @@ ApplicationWindow {
                                 }
 
                                 ThemedGroupBox {
-                                    title: "ESP32 串口"
-                                    titleHelpText: "串口控制后端状态和快速检测。"
+                                    title: "Makcu 串口"
+                                    titleHelpText: "Makcu 串口状态与 km.* 协议校验。"
                                     Layout.fillWidth: true
                                     implicitHeight: Math.max(esp32Layout.implicitHeight + 24, 150)
 
@@ -2308,7 +2308,7 @@ ApplicationWindow {
 
                                         ThemedCheckBox {
                                             id: esp32EnableBox
-                                            text: "启用 ESP32"
+                                            text: "启用 Makcu"
                                             Layout.columnSpan: 2
                                             onToggled: window.commitSettings()
                                         }

@@ -307,7 +307,7 @@ class QmlBridge(QObject):
         self.esp32_enabled = False
         self.esp32_port = "COM3"
         self.esp32_baud = 115200
-        self.esp32_scan_status = "ESP32 检测: 未执行"
+        self.esp32_scan_status = "Makcu 检测: 未执行"
         self.esp32_serial_ports_text = "串口候选: 未扫描"
         self.esp32_scan_running = False
         self.aim_keys = "2"
@@ -664,7 +664,7 @@ class QmlBridge(QObject):
                     hwid = str(getattr(port, "hwid", "") or "").strip()
                     combined = f"{device} {description} {hwid}".lower()
                     score = 0
-                    for keyword in ("esp32", "usb serial", "ch340", "ch343", "cp210", "wch"):
+                    for keyword in ("makcu", "maku", "usb serial", "ch340", "ch343", "cp210", "wch"):
                         if keyword in combined:
                             score += 1
                     ports.append(
@@ -698,43 +698,56 @@ class QmlBridge(QObject):
         ports.sort(key=lambda item: (-int(item.get("score", 0)), item["port"]))
         return ports
 
+    @staticmethod
+    def _parse_makcu_button_reply(reply: str):
+        lines = reply.replace("\r", "").split("\n")
+        for index, line in enumerate(lines):
+            if line.strip() != "km.left()":
+                continue
+            for state_line in lines[index + 1:]:
+                state = state_line.strip()
+                if not state:
+                    continue
+                if state in ("0", "1"):
+                    return state
+                break
+        return None
+
     def _probe_serial_port(self, port: str, baud: int):
         serial_mod, _ = self._load_pyserial()
         if serial_mod is None:
-            return False, "未安装 pyserial，无法进行串口握手检测。"
+            return False, "未安装 pyserial，无法进行 Makcu 协议检测。"
         try:
-            with serial_mod.Serial(port=port, baudrate=int(baud), timeout=0.35, write_timeout=0.35) as ser:
-                time.sleep(1.6)
+            with serial_mod.Serial(port=port, baudrate=int(baud), timeout=0.08, write_timeout=0.35) as ser:
+                try:
+                    ser.dtr = False
+                    ser.rts = False
+                except Exception:
+                    pass
                 try:
                     ser.reset_input_buffer()
                     ser.reset_output_buffer()
                 except Exception:
                     pass
+                ser.write(b"km.left()\r\n")
+                ser.flush()
 
-                replies = []
-                try:
-                    boot_banner = ser.read(256).decode("utf-8", errors="ignore").strip()
-                except Exception:
-                    boot_banner = ""
-                if boot_banner:
-                    replies.append(boot_banner)
-                    if any(token in boot_banner.upper() for token in ("PONG", "ESP32", "OK")):
-                        return True, boot_banner
+                chunks = []
+                deadline = time.monotonic() + 0.45
+                while time.monotonic() < deadline:
+                    chunk = ser.read(256)
+                    if not chunk:
+                        continue
+                    chunks.append(chunk.decode("utf-8", errors="ignore"))
+                    reply = "".join(chunks)
+                    state = self._parse_makcu_button_reply(reply)
+                    if state is not None:
+                        return True, f"Makcu km.left() 回显正常，状态={state}"
 
-                for _ in range(3):
-                    ser.write(b"PING\n")
-                    ser.flush()
-                    time.sleep(0.35)
-                    reply = ser.read(256).decode("utf-8", errors="ignore").strip()
-                    if reply:
-                        replies.append(reply)
-                        if any(token in reply.upper() for token in ("PONG", "ESP32", "OK")):
-                            return True, reply or "收到有效回复"
-
-                reply = " | ".join(part for part in replies if part).strip()
-                if any(token in reply.upper() for token in ("PONG", "ESP32", "OK")):
-                    return True, reply or "收到有效回复"
-                return False, reply or "未收到回复"
+                reply = "".join(chunks).strip()
+                if reply:
+                    return False, f"收到非 Makcu 查询响应: {reply[:160]}"
+                return False, "未收到 km.left() 查询响应"
         except Exception as exc:
             return False, str(exc)
 
@@ -1393,7 +1406,7 @@ class QmlBridge(QObject):
     @Slot()
     def autoDetectEsp32Serial(self):
         if self.esp32_scan_running:
-            self._append_log("[WARN] 当前已有 ESP32 检测任务在进行。")
+            self._append_log("[WARN] 当前已有 Makcu 检测任务在进行。")
             return
 
         def _worker():
@@ -1406,10 +1419,10 @@ class QmlBridge(QObject):
                     else "串口候选: 未发现可用 COM 口"
                 )
                 if not ports:
-                    self._set_esp32_scan_status("[WARN] ESP32 串口自动检测失败: 没有发现可用 COM 口。")
+                    self._set_esp32_scan_status("[WARN] Makcu 串口自动检测失败: 没有发现可用 COM 口。")
                     return
                 baud_candidates = []
-                for baud in (self.esp32_baud, 115200, 921600, 460800, 230400):
+                for baud in (self.esp32_baud, 115200, 4000000):
                     try:
                         parsed = int(baud)
                     except Exception:
@@ -1435,11 +1448,11 @@ class QmlBridge(QObject):
                             self.esp32_port = port_item["port"]
                             self.esp32_baud = baud
                             self._set_esp32_scan_status(
-                                f"[SUCCESS] 已探测到 ESP32 串口: {self.esp32_port} @ {self.esp32_baud} | {detail}"
+                                f"[SUCCESS] 已探测到 Makcu 串口: {self.esp32_port} @ {self.esp32_baud} | {detail}"
                             )
                             self._emit_state()
                             return
-                self._set_esp32_scan_status("[WARN] 未探测到可握手的 ESP32 串口，请确认 COM、波特率和固件 PING/PONG 协议。")
+                self._set_esp32_scan_status("[WARN] 未探测到可握手的 Makcu 串口，请确认 COM、波特率和 km.left() 查询协议。")
                 self._emit_state()
             finally:
                 self._set_esp32_scan_running(False)
@@ -1449,7 +1462,7 @@ class QmlBridge(QObject):
     @Slot()
     def probeEsp32Connection(self):
         if self.esp32_scan_running:
-            self._append_log("[WARN] 当前已有 ESP32 检测任务在进行。")
+            self._append_log("[WARN] 当前已有 Makcu 检测任务在进行。")
             return
 
         def _worker():
