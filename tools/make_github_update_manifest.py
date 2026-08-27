@@ -13,12 +13,11 @@ DEFAULT_PRESERVE = [
     "runtime/logi_driver.dll",
     "gui_settings.json",
 ]
-WEB_ONLY_DELETE = [
-    "qml",
-    "backend/qml_bridge.py",
-    "6_run_qml_panel.vbs",
-    "run_panel_hidden.pyw",
-    "gui_qml_trial.py",
+QML_ONLY_DELETE = [
+    "backend/web_panel_controller.py",
+    "backend/mobile_control_server.py",
+    "6_run_web_panel.vbs",
+    "run_web_panel_hidden.pyw",
 ]
 DEFAULT_SIGNING_KEY = Path.home() / ".neko" / "update_signing_key.json"
 SHA256_DIGEST_INFO_PREFIX = bytes.fromhex("3031300D060960864801650304020105000420")
@@ -80,9 +79,9 @@ def main() -> int:
     parser.add_argument("--asset-url", default="", help="Manifest asset URL. Defaults to the GitHub Release URL.")
     parser.add_argument("--notes", default="", help="Release notes shown by the updater.")
     parser.add_argument(
-        "--web-only-delete",
+        "--qml-only-delete",
         action="store_true",
-        help="Add delete[] entries that remove the QML panel chain for an explicit Web-only release.",
+        help="Add delete[] entries that remove retired Web-panel files for a QML-only release.",
     )
     parser.add_argument(
         "--delete",
@@ -105,8 +104,8 @@ def main() -> int:
         "preserve": DEFAULT_PRESERVE,
     }
     delete_paths = list(args.delete or [])
-    if args.web_only_delete:
-        delete_paths.extend(WEB_ONLY_DELETE)
+    if args.qml_only_delete:
+        delete_paths.extend(QML_ONLY_DELETE)
     if delete_paths:
         manifest["delete"] = list(dict.fromkeys(path.replace("\\", "/") for path in delete_paths))
 

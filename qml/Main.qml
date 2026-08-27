@@ -24,6 +24,8 @@ ApplicationWindow {
     property int keyDisplayWidth: 156
     property int keyActionWidth: 108
     property int activeWorkspace: 0
+    property string activeCaptureSource: backend.captureSourceValue === "capture_card" ? "capture_card" : "desktop"
+    readonly property bool captureCardMode: activeCaptureSource === "capture_card"
     property real cardFillAlpha: Math.max(0.0, Math.min(1.0, backend.cardOpacityValue / 100.0))
     property real panelFillAlpha: Math.max(0.48, Math.min(0.92, window.cardFillAlpha + 0.36))
     property color panelBorderColor: window.withAlpha(backend.accent2Color, 0.24)
@@ -129,6 +131,82 @@ ApplicationWindow {
         cpuHistory = pushMonitorSample(cpuHistory, backend.cpuUsageValue)
         gpuHistory = pushMonitorSample(gpuHistory, backend.gpuUsageValue)
         memoryHistory = pushMonitorSample(memoryHistory, backend.memoryUsageValue)
+    }
+
+    function captureCardDeviceList() {
+        return backend.captureCardDevices || []
+    }
+
+    function captureCardDeviceLabels() {
+        const devices = captureCardDeviceList()
+        const labels = []
+        for (let index = 0; index < devices.length; ++index) {
+            const device = devices[index]
+            if (device && device.display !== undefined && String(device.display).length > 0)
+                labels.push(String(device.display))
+            else if (device && device.name !== undefined)
+                labels.push("视频输入 " + device.index + " | " + String(device.name))
+            else
+                labels.push("视频输入 " + index)
+        }
+        return labels
+    }
+
+    function captureCardDeviceModelIndex(deviceIndex) {
+        const devices = captureCardDeviceList()
+        const target = Number(deviceIndex)
+        for (let index = 0; index < devices.length; ++index) {
+            if (devices[index] && Number(devices[index].index) === target)
+                return index
+        }
+        return devices.length > 0 ? 0 : -1
+    }
+
+    function selectedCaptureCardDevice() {
+        const devices = captureCardDeviceList()
+        const modelIndex = captureCardDeviceBox.currentIndex
+        if (modelIndex >= 0 && modelIndex < devices.length)
+            return devices[modelIndex]
+        return null
+    }
+
+    function captureCardSettings() {
+        const device = selectedCaptureCardDevice()
+        let deviceIndex = Number(backend.captureCardDeviceIndexValue)
+        let deviceName = backend.captureCardDeviceNameValue || ""
+        if (device) {
+            if (device.index !== undefined)
+                deviceIndex = Number(device.index)
+            if (device.name !== undefined)
+                deviceName = String(device.name)
+        }
+        if (isNaN(deviceIndex))
+            deviceIndex = -1
+
+        return {
+            capture_source: window.activeCaptureSource,
+            capture_card_device_index: deviceIndex,
+            capture_card_device_name: deviceName,
+            capture_card_width: captureCardWidthField.text,
+            capture_card_height: captureCardHeightField.text,
+            capture_card_fps: captureCardFpsField.text,
+            capture_card_pixel_format: captureCardFormatBox.currentText,
+            capture_preview: capturePreviewBox.checked
+        }
+    }
+
+    function commitCaptureCardSettings() {
+        backend.setCaptureCardConfig(window.captureCardSettings())
+    }
+
+    function selectCaptureSource(source) {
+        if (source === window.activeCaptureSource)
+            return
+        if (source !== "capture_card" && backend.captureCardPreviewActive)
+            backend.stopCaptureCardPreview()
+        backend.setCaptureSource(source)
+        if (source === "capture_card")
+            backend.refreshCaptureCardDevices()
     }
 
     Connections {
@@ -1025,6 +1103,7 @@ ApplicationWindow {
 
     function collectSettings() {
         let activeMode = backgroundImageField.text.length > 0 ? "image" : "none"
+        const captureSettings = window.captureCardSettings()
 
         return {
             model_path: modelPathField.text,
@@ -1070,7 +1149,15 @@ ApplicationWindow {
             background_video_path: "",
             background_video_url: "",
             background_volume: backend.backgroundVolumeValue,
-            active_background_mode: activeMode
+            active_background_mode: activeMode,
+            capture_source: captureSettings.capture_source,
+            capture_card_device_index: captureSettings.capture_card_device_index,
+            capture_card_device_name: captureSettings.capture_card_device_name,
+            capture_card_width: captureSettings.capture_card_width,
+            capture_card_height: captureSettings.capture_card_height,
+            capture_card_fps: captureSettings.capture_card_fps,
+            capture_card_pixel_format: captureSettings.capture_card_pixel_format,
+            capture_preview: captureSettings.capture_preview
         }
     }
 
@@ -1105,6 +1192,9 @@ ApplicationWindow {
         if (!triggerKeysField.textEditing) triggerKeysField.text = backend.triggerKeysValue
         if (!esp32PortField.textEditing) esp32PortField.text = backend.esp32PortValue
         if (!esp32BaudField.activeFocus) esp32BaudField.text = backend.esp32BaudValue.toString()
+        if (!captureCardWidthField.activeFocus) captureCardWidthField.text = backend.captureCardWidthValue.toString()
+        if (!captureCardHeightField.activeFocus) captureCardHeightField.text = backend.captureCardHeightValue.toString()
+        if (!captureCardFpsField.activeFocus) captureCardFpsField.text = Number(backend.captureCardFpsValue).toFixed(1)
         if (!customThemeField.textEditing) customThemeField.text = backend.customThemeColorValue
         if (!backgroundImageField.textEditing) backgroundImageField.text = backend.backgroundImagePathValue
         opacitySlider.value = backend.cardOpacityValue
@@ -1114,6 +1204,14 @@ ApplicationWindow {
         stickEnableBox.checked = backend.stickEnableValue
         lghubBox.checked = backend.lghubEnabledValue
         esp32EnableBox.checked = backend.esp32EnabledValue
+        capturePreviewBox.checked = backend.capturePreviewEnabledValue
+        const captureDeviceIndex = captureCardDeviceModelIndex(backend.captureCardDeviceIndexValue)
+        if (captureDeviceIndex >= 0 && !captureCardDeviceBox.popup.visible)
+            captureCardDeviceBox.currentIndex = captureDeviceIndex
+
+        const captureFormatIndex = captureCardFormatBox.find(backend.captureCardPixelFormatValue)
+        if (captureFormatIndex >= 0 && !captureCardFormatBox.popup.visible)
+            captureCardFormatBox.currentIndex = captureFormatIndex
 
         let themeIndex = themeCombo.find(backend.themeNameValue)
         if (themeIndex >= 0)
@@ -1134,6 +1232,8 @@ ApplicationWindow {
         activeWorkspace = 0
         syncFromBackend()
         refreshMonitorHistory()
+        if (window.captureCardMode)
+            backend.refreshCaptureCardDevices()
         Qt.callLater(resetPanelScrollPositions)
     }
 
@@ -1967,6 +2067,258 @@ ApplicationWindow {
                                             color: backend.accent2Color
                                             Layout.columnSpan: 3
                                             Layout.fillWidth: true
+                                        }
+                                    }
+                                }
+
+                                ThemedGroupBox {
+                                    id: captureCardGroup
+                                    title: "画面采集"
+                                    titleHelpText: "可在桌面 ROI 采集和 USB/HDMI 采集卡之间切换；诊断预览会在启动推理前自动释放设备。"
+                                    Layout.fillWidth: true
+                                    implicitHeight: captureCardLayout.implicitHeight + 24
+
+                                    ColumnLayout {
+                                        id: captureCardLayout
+                                        anchors.fill: parent
+                                        spacing: 8
+
+                                        GridLayout {
+                                            Layout.fillWidth: true
+                                            columns: 4
+                                            columnSpacing: 10
+                                            rowSpacing: 8
+
+                                            FormLabel { text: "来源" }
+                                            ThemedComboBox {
+                                                id: captureSourceBox
+                                                Layout.columnSpan: 3
+                                                Layout.fillWidth: true
+                                                helpText: "桌面采集使用当前的中心 ROI；采集卡适合 HDMI、USB 视频输入和外置捕获设备。"
+                                                model: ["桌面采集", "采集卡"]
+                                                currentIndex: window.captureCardMode ? 1 : 0
+                                                enabled: !backend.pipelineRunning
+                                                onActivated: window.selectCaptureSource(currentIndex === 1 ? "capture_card" : "desktop")
+                                            }
+
+                                            FormLabel { text: "链路" }
+                                            HoverInfoLabel {
+                                                Layout.columnSpan: 3
+                                                Layout.fillWidth: true
+                                                text: backend.capturePathText
+                                                fullText: backend.capturePathText
+                                                color: backend.accent2Color
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            visible: window.captureCardMode
+                                            spacing: 8
+
+                                            GridLayout {
+                                                Layout.fillWidth: true
+                                                columns: 4
+                                                columnSpacing: 10
+                                                rowSpacing: 8
+
+                                                FormLabel { text: "视频输入" }
+                                                ThemedComboBox {
+                                                    id: captureCardDeviceBox
+                                                    Layout.columnSpan: 2
+                                                    Layout.fillWidth: true
+                                                    Layout.minimumWidth: 0
+                                                    helpText: "刷新后选择采集卡设备。设备被诊断预览占用时，启动推理会先自动释放预览。"
+                                                    model: window.captureCardDeviceLabels()
+                                                    currentIndex: window.captureCardDeviceModelIndex(backend.captureCardDeviceIndexValue)
+                                                    enabled: model.length > 0 && !backend.captureCardRefreshRunning && !backend.pipelineRunning
+                                                    onActivated: window.commitCaptureCardSettings()
+                                                }
+                                                SecondaryButton {
+                                                    text: backend.captureCardRefreshRunning ? "刷新中..." : "刷新"
+                                                    Layout.preferredWidth: 78
+                                                    helpText: "重新枚举 Windows 视频输入和采集卡设备。"
+                                                    enabled: !backend.captureCardRefreshRunning && !backend.pipelineRunning
+                                                    onClicked: backend.refreshCaptureCardDevices()
+                                                }
+
+                                                FormLabel { text: "宽度" }
+                                                WheelValueField {
+                                                    id: captureCardWidthField
+                                                    Layout.preferredWidth: window.compactValueWidth
+                                                    placeholderText: "1280"
+                                                    wheelStep: 16
+                                                    wheelPrecision: 0
+                                                    integerOnly: true
+                                                    clampEnabled: true
+                                                    minimumValue: 160
+                                                    maximumValue: 7680
+                                                    enabled: !backend.pipelineRunning
+                                                    onEditingFinished: window.commitCaptureCardSettings()
+                                                }
+                                                FormLabel { text: "高度" }
+                                                WheelValueField {
+                                                    id: captureCardHeightField
+                                                    Layout.preferredWidth: window.compactValueWidth
+                                                    placeholderText: "720"
+                                                    wheelStep: 16
+                                                    wheelPrecision: 0
+                                                    integerOnly: true
+                                                    clampEnabled: true
+                                                    minimumValue: 120
+                                                    maximumValue: 4320
+                                                    enabled: !backend.pipelineRunning
+                                                    onEditingFinished: window.commitCaptureCardSettings()
+                                                }
+
+                                                FormLabel { text: "帧率" }
+                                                WheelValueField {
+                                                    id: captureCardFpsField
+                                                    Layout.preferredWidth: window.compactValueWidth
+                                                    placeholderText: "30.0"
+                                                    wheelStep: 1
+                                                    wheelPrecision: 1
+                                                    clampEnabled: true
+                                                    minimumValue: 1
+                                                    maximumValue: 240
+                                                    enabled: !backend.pipelineRunning
+                                                    onEditingFinished: window.commitCaptureCardSettings()
+                                                }
+                                                FormLabel { text: "格式" }
+                                                ThemedComboBox {
+                                                    id: captureCardFormatBox
+                                                    Layout.columnSpan: 2
+                                                    Layout.fillWidth: true
+                                                    helpText: "MJPG 通常兼顾兼容性和带宽；AUTO 交由设备协商。"
+                                                    model: backend.captureCardPixelFormats && backend.captureCardPixelFormats.length > 0
+                                                           ? backend.captureCardPixelFormats
+                                                           : ["AUTO", "RGB32", "NV12", "YUY2", "MJPG"]
+                                                    currentIndex: {
+                                                        const index = find(backend.captureCardPixelFormatValue)
+                                                        return index >= 0 ? index : 0
+                                                    }
+                                                    enabled: !backend.pipelineRunning
+                                                    onActivated: window.commitCaptureCardSettings()
+                                                }
+
+                                                ThemedCheckBox {
+                                                    id: capturePreviewBox
+                                                    text: "启用诊断预览"
+                                                    Layout.columnSpan: 2
+                                                    checked: backend.capturePreviewEnabledValue
+                                                    enabled: !backend.pipelineRunning
+                                                    onToggled: {
+                                                        window.commitCaptureCardSettings()
+                                                        if (!checked && backend.captureCardPreviewActive)
+                                                            backend.stopCaptureCardPreview()
+                                                    }
+                                                }
+                                                HoverInfoLabel {
+                                                    Layout.columnSpan: 2
+                                                    Layout.fillWidth: true
+                                                    allowWrap: true
+                                                    text: backend.captureCardStatusText
+                                                    fullText: backend.captureCardStatusText
+                                                    color: backend.captureCardPreviewActive ? backend.accent2Color : backend.mutedColor
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                SecondaryButton {
+                                                    text: "重新扫描设备"
+                                                    Layout.preferredWidth: 122
+                                                    helpText: "设备接入或拔出后，重新扫描采集卡列表。"
+                                                    enabled: !backend.captureCardRefreshRunning && !backend.pipelineRunning
+                                                    onClicked: backend.refreshCaptureCardDevices()
+                                                }
+                                                Item { Layout.fillWidth: true }
+                                                ThemedButton {
+                                                    text: backend.captureCardPreviewActive ? "预览已连接" : "打开预览"
+                                                    Layout.preferredWidth: 116
+                                                    helpText: "按当前设备、尺寸、帧率和格式打开低帧率诊断预览。"
+                                                    enabled: capturePreviewBox.checked
+                                                             && captureCardDeviceBox.currentIndex >= 0
+                                                             && !backend.captureCardPreviewActive
+                                                             && !backend.pipelineRunning
+                                                    onClicked: {
+                                                        window.commitCaptureCardSettings()
+                                                        backend.startCaptureCardPreview(window.collectSettings())
+                                                    }
+                                                }
+                                                SecondaryButton {
+                                                    text: "关闭预览"
+                                                    Layout.preferredWidth: 96
+                                                    helpText: "关闭诊断预览，释放采集卡给推理核心或其他程序使用。"
+                                                    enabled: backend.captureCardPreviewActive
+                                                    onClicked: backend.stopCaptureCardPreview()
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                id: captureCardPreviewPanel
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: Math.max(188, Math.min(384, width * 9.0 / 16.0))
+                                                Layout.minimumHeight: 188
+                                                Layout.maximumHeight: 384
+                                                clip: true
+                                                radius: 6
+                                                color: window.withAlpha(backend.surfaceColor, Math.max(0.56, window.cardFillAlpha))
+                                                border.width: 1
+                                                border.color: backend.captureCardPreviewActive
+                                                              ? window.withAlpha(backend.accentColor, 0.76)
+                                                              : window.sectionBorderColor
+
+                                                Image {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 1
+                                                    source: backend.captureCardPreviewUrl
+                                                    fillMode: Image.PreserveAspectFit
+                                                    smooth: true
+                                                    cache: false
+                                                    visible: source.toString().length > 0
+                                                }
+
+                                                Column {
+                                                    anchors.centerIn: parent
+                                                    width: Math.min(parent.width - 30, 380)
+                                                    spacing: 6
+                                                    visible: !backend.captureCardPreviewUrl
+
+                                                    Text {
+                                                        width: parent.width
+                                                        text: backend.captureCardPreviewActive ? "正在等待视频帧..." : "采集卡预览"
+                                                        horizontalAlignment: Text.AlignHCenter
+                                                        color: backend.textColor
+                                                        font.pixelSize: 15
+                                                        font.bold: true
+                                                    }
+                                                    Text {
+                                                        width: parent.width
+                                                        text: backend.captureCardPreviewActive
+                                                              ? "请确认采集卡输入信号与当前格式匹配"
+                                                              : "选择设备后打开预览，可先确认 HDMI/AV视频画面"
+                                                        horizontalAlignment: Text.AlignHCenter
+                                                        wrapMode: Text.WordWrap
+                                                        color: backend.mutedColor
+                                                        font.pixelSize: 12
+                                                    }
+                                                }
+
+                                                Text {
+                                                    anchors.left: parent.left
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.leftMargin: 10
+                                                    anchors.bottomMargin: 8
+                                                    text: backend.captureCardPreviewWidth > 0 && backend.captureCardPreviewHeight > 0
+                                                          ? backend.captureCardPreviewWidth + " x " + backend.captureCardPreviewHeight
+                                                          : "诊断预览最多 3 fps"
+                                                    color: window.withAlpha(backend.textColor, 0.88)
+                                                    font.pixelSize: 11
+                                                }
+                                            }
                                         }
                                     }
                                 }

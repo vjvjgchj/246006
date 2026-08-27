@@ -1,6 +1,6 @@
 # Neko Runtime Package
 
-This directory is the packaged Neko panel/runtime workspace. The active panel is the QML panel. The Web panel remains as a fallback/diagnostic entry, but update packages must not delete the QML chain by default.
+This directory is the packaged Neko panel/runtime workspace. The QML panel is the only supported panel entry, and update packages must preserve its launch chain.
 
 ## Main Files
 
@@ -9,8 +9,6 @@ This directory is the packaged Neko panel/runtime workspace. The active panel is
 - `gui_qml_trial.py`: QML application entry.
 - `qml/Main.qml`: QML user interface.
 - `backend/qml_bridge.py`: QML bridge that writes runtime config, validates capabilities, and launches the runtime executable.
-- `6_run_web_panel.vbs`: optional Web fallback entry.
-- `backend/web_panel_controller.py`: Web fallback controller.
 - `runtime/`: runtime directory used by the panel.
 - `runtime/TRT_ZeroCopy_Pipeline.exe`: inference core executable.
 - `runtime/config.txt`: runtime config consumed by the executable.
@@ -26,7 +24,7 @@ This directory is the packaged Neko panel/runtime workspace. The active panel is
 
 ## Update Rule
 
-QML is the main chain. Do not add these paths to `delete[]` unless you are intentionally publishing a Web-only rollback:
+QML is the only supported panel chain. Do not add these paths to `delete[]`:
 
 - `qml/`
 - `backend/qml_bridge.py`

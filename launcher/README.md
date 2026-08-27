@@ -4,8 +4,7 @@
 
 Place both files in the user's `neko` directory and run `NekoLauncher.bat`.
 By default, the launcher treats its own directory as the install/update target.
-After a successful package install, it starts `6_run_qml_panel.vbs` by default
-and falls back to `6_run_web_panel.vbs` only when the QML entry is missing.
+After a successful package install, it starts `6_run_qml_panel.vbs`.
 
 Default manifest:
 

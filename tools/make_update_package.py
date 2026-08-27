@@ -13,9 +13,14 @@ DEFAULT_EXCLUDES = [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
     "gui_settings.json",
-    "backend/atomic_file.py",
     "updates/stable.json",
 ]
+RETIRED_WEB_PATHS = {
+    "backend/web_panel_controller.py",
+    "backend/mobile_control_server.py",
+    "6_run_web_panel.vbs",
+    "run_web_panel_hidden.pyw",
+}
 
 
 def normalize_relative_path(value: str) -> str:
@@ -72,6 +77,8 @@ def collect_files(includes: list[str], excludes: list[str], output_path: Path) -
             if candidate.resolve() == output_resolved:
                 continue
             rel_path = str(candidate.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            if rel_path.lower() in RETIRED_WEB_PATHS:
+                continue
             if should_exclude(rel_path, excludes):
                 continue
             files.append((candidate, rel_path))

@@ -38,6 +38,14 @@ from backend.update_manager import (
     load_manifest,
     stage_update,
 )
+from backend.atomic_file import atomic_write_text
+from backend.capture_card import (
+    CaptureCardConfig,
+    CaptureCardPreviewFrame,
+    CaptureCardService,
+    CaptureCardStatus,
+    PIXEL_FORMATS,
+)
 
 
 class FILETIME(ctypes.Structure):
@@ -197,6 +205,10 @@ class QmlBridge(QObject):
     systemMetricsSampled = Signal(object)
     licenseStatusSampled = Signal(object)
     updateStatusSampled = Signal(object)
+    captureCardDevicesSampled = Signal(object)
+    captureCardPreviewSampled = Signal(object)
+    captureCardStatusSampled = Signal(object)
+    esp32SerialScanFinished = Signal(object)
 
     SAVE_FILE = "gui_settings.json"
     DEFAULT_UPDATE_MANIFEST_URL = "https://gitee.com/w246006/246006/raw/main/updates/stable.json"
@@ -266,12 +278,17 @@ class QmlBridge(QObject):
         self.systemMetricsSampled.connect(self._apply_system_metrics)
         self.licenseStatusSampled.connect(self._apply_license_status)
         self.updateStatusSampled.connect(self._apply_update_status)
+        self.captureCardDevicesSampled.connect(self._apply_capture_card_devices)
+        self.captureCardPreviewSampled.connect(self._apply_capture_card_preview)
+        self.captureCardStatusSampled.connect(self._apply_capture_card_status)
+        self.esp32SerialScanFinished.connect(self._apply_esp32_serial_scan_result)
         self.class_model = ClassSelectionModel(self)
         self.log_model = LogListModel(self)
         self._log_lines = []
         self.conversion_process = None
         self.pipeline_process = None
         self._pipeline_stop_requested = False
+        self._pipeline_stop_event_name = ""
         self.current_record_target = None
         self.model_path = ""
         self.engine_path = ""
@@ -297,6 +314,23 @@ class QmlBridge(QObject):
         self.recoil_delay = 100.0
         self.pipeline_mode = "性能模式"
         self.capture_path_text = "采集链路: ROI CopySubresourceRegion (仅复制中心 ROI)"
+        self.capture_source = "desktop"
+        self.capture_card_service = CaptureCardService()
+        self.capture_card_config = CaptureCardConfig()
+        self.capture_card_device_name = ""
+        self.capture_card_devices = []
+        self.capture_card_status_text = self.capture_card_service.availability()[1]
+        self.capture_card_preview_url = ""
+        self.capture_card_preview_width = 0
+        self.capture_card_preview_height = 0
+        self.capture_card_preview_timestamp = 0.0
+        self.capture_card_preview_active = False
+        self.capture_preview_enabled = False
+        self.capture_card_refresh_running = False
+        self._capture_card_preview_session_id = 0
+        self._capture_card_preview_devices = []
+        self._capture_card_refresh_lock = threading.Lock()
+        self._capture_card_refresh_in_flight = False
         self.motion_mode = "经典模式"
         self.neural_curvature = 0.18
         self.neural_tremor = 0.28
@@ -955,6 +989,374 @@ class QmlBridge(QObject):
             return text
         return default_value
 
+    @staticmethod
+    def _normalize_capture_source(value) -> str:
+        source = str(value or "").strip().lower()
+        if source in {"capture_card", "capturecard", "card", "采集卡", "视频采集卡"}:
+            return "capture_card"
+        return "desktop"
+
+    @staticmethod
+    def _runtime_config_text(value) -> str:
+        """Keep one-line runtime config values parseable even for device names."""
+
+        return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+
+    def _update_capture_path_text(self):
+        if self.capture_source == "capture_card":
+            self.capture_path_text = (
+                "采集链路: Media Foundation 视频输入 -> CPU/D3D11 -> CUDA"
+                "（面板预览使用 DirectShow/OpenCV）"
+            )
+        else:
+            self.capture_path_text = "采集链路: ROI CopySubresourceRegion (仅复制中心 ROI)"
+
+    def _set_capture_card_config_from_map(self, data) -> bool:
+        if not isinstance(data, dict):
+            data = {}
+        previous = self.capture_card_config
+        self.capture_card_config = CaptureCardConfig.from_mapping(data, previous)
+        raw_name = data.get(
+            "capture_card_device_name",
+            data.get("capture_device_name", self.capture_card_device_name),
+        )
+        self.capture_card_device_name = self._runtime_config_text(raw_name)
+        selected_name = self._selected_capture_card_device_name()
+        if selected_name:
+            self.capture_card_device_name = selected_name
+        return previous != self.capture_card_config
+
+    def _selected_capture_card_device_name(self) -> str:
+        selected_index = self.capture_card_config.device_index
+        for device in self.capture_card_devices:
+            if self._coerce_int(device.get("index", -1), -1) == selected_index:
+                return self._runtime_config_text(device.get("name", ""))
+        return ""
+
+    def _capture_card_config_map(self):
+        result = self.capture_card_config.as_settings()
+        result.update(
+            {
+                "capture_source": self.capture_source,
+                "capture_card_device_name": self.capture_card_device_name,
+                "capture_device_name": self.capture_card_device_name,
+                "capture_preview": self.capture_preview_enabled,
+            }
+        )
+        return result
+
+    @staticmethod
+    def _normalized_capture_device_name(value) -> str:
+        """Return a backend-neutral identifier for friendly-name matching."""
+
+        return "".join(character for character in str(value or "").casefold() if character.isalnum())
+
+    def _runtime_capture_card_command(self, arguments, timeout=10.0):
+        """Run a short, non-inference runtime query and decode its JSON reply."""
+
+        if not os.path.isfile(self.runtime_exe_path):
+            return None, "正式推理核心尚未部署，无法枚举采集卡。"
+        try:
+            result = subprocess.run(
+                [self.runtime_exe_path, *arguments],
+                cwd=self.runtime_root,
+                capture_output=True,
+                timeout=timeout,
+                creationflags=self._hidden_process_flags(),
+            )
+        except Exception as exc:
+            return None, f"调用正式推理核心失败: {exc}"
+
+        output = self._decode_process_output((result.stdout or b"") + b"\n" + (result.stderr or b""))
+        payload = None
+        for line in reversed(output.splitlines()):
+            candidate = line.strip()
+            if not candidate.startswith("{"):
+                continue
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                payload = parsed
+                break
+        if payload is None:
+            detail = output.strip().replace("\r", " ").replace("\n", " ")[:280]
+            suffix = f": {detail}" if detail else ""
+            return None, f"正式推理核心未返回采集卡列表{suffix}"
+        if result.returncode != 0 or payload.get("ok") is False:
+            detail = str(payload.get("error", "")).strip() or output.strip().replace("\n", " ")[:280]
+            suffix = f": {detail}" if detail else ""
+            return None, f"正式推理核心采集卡查询失败{suffix}"
+        return payload, ""
+
+    def _runtime_supports_capture_card_cli(self) -> bool:
+        if not os.path.isfile(self.runtime_exe_path):
+            return False
+        try:
+            result = subprocess.run(
+                [self.runtime_exe_path, "--capabilities"],
+                cwd=self.runtime_root,
+                capture_output=True,
+                timeout=6.0,
+                creationflags=self._hidden_process_flags(),
+            )
+        except Exception:
+            return False
+        output = self._decode_process_output((result.stdout or b"") + b"\n" + (result.stderr or b""))
+        return result.returncode == 0 and "capture_card_cli=1" in output
+
+    def _runtime_capture_card_devices(self):
+        if not self._runtime_supports_capture_card_cli():
+            return None, "当前正式推理核心不支持采集卡枚举，已使用面板诊断列表。"
+        payload, error = self._runtime_capture_card_command(["--list-capture-devices"], timeout=12.0)
+        if not isinstance(payload, dict):
+            return None, error
+        devices = payload.get("devices", [])
+        if not isinstance(devices, list):
+            return None, "正式推理核心返回了无效的采集卡设备列表。"
+        return devices, ""
+
+    def _preview_device_index_for(self, core_device, preview_devices):
+        requested_name = self._normalized_capture_device_name(core_device.get("name", ""))
+        requested_index = self._coerce_int(core_device.get("index", -1), -1)
+        if requested_name:
+            for preview in preview_devices:
+                preview_name = self._normalized_capture_device_name(preview.get("name", ""))
+                if preview_name and preview_name == requested_name:
+                    return self._coerce_int(preview.get("index", -1), -1)
+            for preview in preview_devices:
+                preview_name = self._normalized_capture_device_name(preview.get("name", ""))
+                if preview_name and (requested_name in preview_name or preview_name in requested_name):
+                    return self._coerce_int(preview.get("index", -1), -1)
+        for preview in preview_devices:
+            if self._coerce_int(preview.get("index", -1), -1) == requested_index:
+                return requested_index
+        return -1
+
+    def _combine_capture_card_devices(self, core_devices, preview_devices):
+        combined = []
+        for raw_device in core_devices:
+            if not isinstance(raw_device, dict):
+                continue
+            index = self._coerce_int(raw_device.get("index", -1), -1)
+            if index < 0:
+                continue
+            name = self._runtime_config_text(raw_device.get("name", "")) or f"视频输入 {index}"
+            preview_index = self._preview_device_index_for(raw_device, preview_devices)
+            combined.append(
+                {
+                    "id": f"mf:{index}",
+                    "index": index,
+                    "name": name,
+                    "display": f"{name}  |  Media Foundation",
+                    "backend": "media_foundation",
+                    "previewIndex": preview_index,
+                }
+            )
+        return combined
+
+    def _selected_capture_card_device(self):
+        selected_index = self.capture_card_config.device_index
+        for device in self.capture_card_devices:
+            if self._coerce_int(device.get("index", -1), -1) == selected_index:
+                return device
+        return None
+
+    def _apply_capture_card_devices(self, payload):
+        payload = payload or {}
+        raw_devices = payload.get("devices", []) if isinstance(payload, dict) else []
+        devices = []
+        if isinstance(raw_devices, (list, tuple)):
+            for item in raw_devices:
+                if isinstance(item, dict):
+                    devices.append(dict(item))
+        self.capture_card_devices = devices
+        preview_devices = payload.get("previewDevices", []) if isinstance(payload, dict) else []
+        self._capture_card_preview_devices = [
+            dict(item) for item in preview_devices if isinstance(item, dict)
+        ]
+        if self.capture_card_config.device_index < 0 and devices:
+            self.capture_card_config = CaptureCardConfig.from_mapping(
+                {"capture_card_device_index": devices[0].get("index", -1)},
+                self.capture_card_config,
+            )
+        selected_name = self._selected_capture_card_device_name()
+        if selected_name:
+            self.capture_card_device_name = selected_name
+        self.capture_card_refresh_running = False
+        with self._capture_card_refresh_lock:
+            self._capture_card_refresh_in_flight = False
+        status = str(payload.get("status", "采集卡扫描完成。")) if isinstance(payload, dict) else "采集卡扫描完成。"
+        self.capture_card_status_text = status
+        self._append_log(f"[INFO] {status}")
+        self._emit_state()
+
+    def _apply_capture_card_preview(self, payload):
+        payload = payload or {}
+        if not isinstance(payload, dict):
+            return
+        session_id = self._coerce_int(payload.get("sessionId", 0), 0)
+        if session_id and session_id != self._capture_card_preview_session_id:
+            return
+        data_url = str(payload.get("dataUrl", ""))
+        # Bound the UI payload: preview images are diagnostic only, not a video transport.
+        if not data_url.startswith("data:image/jpeg;base64,") or len(data_url) > 4 * 1024 * 1024:
+            return
+        self.capture_card_preview_url = data_url
+        self.capture_card_preview_width = max(0, self._coerce_int(payload.get("width", 0), 0))
+        self.capture_card_preview_height = max(0, self._coerce_int(payload.get("height", 0), 0))
+        self.capture_card_preview_timestamp = max(0.0, self._coerce_float(payload.get("capturedAt", 0.0), 0.0))
+        self.capture_card_preview_active = True
+        self._emit_state()
+
+    def _apply_capture_card_status(self, payload):
+        if isinstance(payload, CaptureCardStatus):
+            payload = payload.as_map()
+        if not isinstance(payload, dict):
+            return
+        session_id = self._coerce_int(payload.get("sessionId", 0), 0)
+        if session_id and session_id != self._capture_card_preview_session_id:
+            return
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            return
+        self.capture_card_status_text = text
+        active = payload.get("active", None)
+        if active is not None:
+            self.capture_card_preview_active = self._coerce_bool(active, False)
+        level = str(payload.get("level", "info")).lower()
+        prefix = "[ERROR]" if level == "error" else "[WARN]" if level == "warn" else "[SUCCESS]" if level == "success" else "[INFO]"
+        self._append_log(f"{prefix} {text}")
+        self._emit_state()
+
+    @Slot(str)
+    def setCaptureSource(self, value: str):
+        source = self._normalize_capture_source(value)
+        if source == self.capture_source:
+            return
+        if source != "capture_card":
+            self.stopCaptureCardPreview()
+        self.capture_source = source
+        self._update_capture_path_text()
+        self._append_log(
+            "[INFO] 已切换为采集卡输入。" if source == "capture_card" else "[INFO] 已切换为桌面 ROI 采集。"
+        )
+        self._emit_state()
+        if source == "capture_card":
+            self.refreshCaptureCardDevices()
+
+    @Slot("QVariantMap")
+    def setCaptureCardConfig(self, data):
+        values = data if isinstance(data, dict) else {}
+        requested_source = values.get("capture_source", self.capture_source)
+        self.capture_source = self._normalize_capture_source(requested_source)
+        self.capture_preview_enabled = self._coerce_bool(
+            values.get("capture_preview", self.capture_preview_enabled), self.capture_preview_enabled
+        )
+        self._set_capture_card_config_from_map(values)
+        self._update_capture_path_text()
+        self._emit_state()
+
+    @Slot()
+    def refreshCaptureCardDevices(self):
+        with self._capture_card_refresh_lock:
+            if self._capture_card_refresh_in_flight:
+                return
+            self._capture_card_refresh_in_flight = True
+        self.capture_card_refresh_running = True
+        self.capture_card_status_text = "正在扫描采集卡设备..."
+        self._emit_state()
+
+        def _worker():
+            try:
+                core_devices, core_status = self._runtime_capture_card_devices()
+                preview_devices, preview_status = self.capture_card_service.enumerate_devices()
+                if core_devices is not None:
+                    devices = self._combine_capture_card_devices(core_devices, preview_devices)
+                    status = (
+                        f"正式推理核心扫描完成: {len(devices)} 个 Media Foundation 视频输入"
+                        if devices
+                        else "正式推理核心扫描完成: 未发现可用视频输入设备"
+                    )
+                    if preview_devices:
+                        status += f"；已映射 {len(preview_devices)} 个面板预览输入"
+                    elif preview_status:
+                        status += f"；预览映射不可用: {preview_status}"
+                else:
+                    devices = preview_devices
+                    status = core_status or preview_status
+                    if devices:
+                        status = f"{status} 已回退为面板诊断设备列表。"
+                self.captureCardDevicesSampled.emit(
+                    {"devices": devices, "previewDevices": preview_devices, "status": status}
+                )
+            except Exception as exc:
+                self.captureCardDevicesSampled.emit(
+                    {"devices": [], "previewDevices": [], "status": f"采集卡扫描失败: {exc}"}
+                )
+
+        threading.Thread(target=_worker, daemon=True, name="neko-capture-card-scan").start()
+
+    @Slot("QVariantMap")
+    def startCaptureCardPreview(self, data):
+        if self._is_pipeline_running():
+            self.capture_card_status_text = "推理核心运行中，不能同时打开采集卡预览。"
+            self._emit_state()
+            return
+        self.setCaptureCardConfig(data)
+        self.capture_source = "capture_card"
+        self.capture_preview_enabled = True
+        selected_device = self._selected_capture_card_device()
+        if not selected_device:
+            self.capture_card_status_text = "请先扫描并选择一个正式推理核心识别到的视频输入。"
+            self._emit_state()
+            return
+        preview_index = self._coerce_int(selected_device.get("previewIndex", -1), -1)
+        if preview_index < 0:
+            preview_index = self._preview_device_index_for(selected_device, self._capture_card_preview_devices)
+        if preview_index < 0:
+            self.capture_card_status_text = "未能将该 Media Foundation 设备映射到预览输入，推理仍可使用该设备。"
+            self._append_log(f"[WARN] {self.capture_card_status_text}")
+            self._emit_state()
+            return
+
+        preview_config = CaptureCardConfig(
+            device_index=preview_index,
+            width=self.capture_card_config.width,
+            height=self.capture_card_config.height,
+            fps=self.capture_card_config.fps,
+            pixel_format=self.capture_card_config.pixel_format,
+        )
+        self.stopCaptureCardPreview()
+        started, message, session_id = self.capture_card_service.start_preview(
+            preview_config,
+            lambda frame: self.captureCardPreviewSampled.emit(
+                frame.as_map() if isinstance(frame, CaptureCardPreviewFrame) else frame
+            ),
+            lambda status: self.captureCardStatusSampled.emit(
+                status.as_map() if isinstance(status, CaptureCardStatus) else status
+            ),
+        )
+        if started:
+            self._capture_card_preview_session_id = session_id
+            self.capture_card_preview_active = True
+            self.capture_card_preview_url = ""
+        self.capture_card_status_text = message
+        self._append_log(f"[INFO] {message}" if started else f"[WARN] {message}")
+        self._emit_state()
+
+    @Slot()
+    def stopCaptureCardPreview(self):
+        was_active = self.capture_card_preview_active or self.capture_card_service.is_preview_running()
+        self.capture_card_service.stop_preview()
+        self._capture_card_preview_session_id += 1
+        self.capture_card_preview_active = False
+        if was_active:
+            self.capture_card_status_text = "采集卡预览已关闭，设备已释放。"
+            self._append_log("[INFO] 采集卡预览已关闭，设备已释放。")
+        self._emit_state()
+
     def _resolve_background_mode(self, preferred_mode: str = "") -> str:
         preferred = str(preferred_mode or "").strip().lower()
         if preferred == "image" and self.background_image_path:
@@ -1076,6 +1478,14 @@ class QmlBridge(QObject):
         self.active_background_mode = self._resolve_background_mode(
             data.get("active_background_mode", self.active_background_mode)
         )
+        self.capture_source = self._normalize_capture_source(
+            data.get("capture_source", self.capture_source)
+        )
+        self.capture_preview_enabled = self._coerce_bool(
+            data.get("capture_preview", self.capture_preview_enabled), self.capture_preview_enabled
+        )
+        self._set_capture_card_config_from_map(data)
+        self._update_capture_path_text()
         self.pipeline_mode = str(data.get("pipeline_mode", self.pipeline_mode)) or "性能模式"
         self.motion_mode = str(data.get("motion_mode", self.motion_mode)) or "经典模式"
         self.neural_curvature = self._clamp_float(
@@ -1156,6 +1566,14 @@ class QmlBridge(QObject):
                 "background_video_url": self.background_video_url,
                 "background_volume": self.background_volume,
                 "active_background_mode": self.active_background_mode,
+                "capture_source": self.capture_source,
+                "capture_card_device_index": self.capture_card_config.device_index,
+                "capture_card_device_name": self.capture_card_device_name,
+                "capture_card_width": self.capture_card_config.width,
+                "capture_card_height": self.capture_card_config.height,
+                "capture_card_fps": self.capture_card_config.fps,
+                "capture_card_pixel_format": self.capture_card_config.pixel_format,
+                "capture_preview": self.capture_preview_enabled,
                 "pipeline_mode": self.pipeline_mode,
                 "motion_mode": self.motion_mode,
                 "neural_curvature": self.neural_curvature,
@@ -1250,6 +1668,14 @@ class QmlBridge(QObject):
         self.active_background_mode = self._resolve_background_mode(
             settings.get("active_background_mode", self.active_background_mode)
         )
+        self.capture_source = self._normalize_capture_source(
+            settings.get("capture_source", self.capture_source)
+        )
+        self.capture_preview_enabled = self._coerce_bool(
+            settings.get("capture_preview", self.capture_preview_enabled), self.capture_preview_enabled
+        )
+        self._set_capture_card_config_from_map(settings)
+        self._update_capture_path_text()
         self.pipeline_mode = str(settings.get("pipeline_mode", self.pipeline_mode)) or "性能模式"
         self.motion_mode = str(settings.get("motion_mode", self.motion_mode)) or "经典模式"
         legacy_strength = settings.get("neural_strength", None)
@@ -1390,6 +1816,28 @@ class QmlBridge(QObject):
         self._emit_state()
 
     @Slot()
+    def _apply_esp32_serial_scan_result(self, payload):
+        result = payload if isinstance(payload, dict) else {}
+        for line in result.get("logs", []):
+            self._append_log(str(line))
+
+        ports_text = result.get("ports_text")
+        if isinstance(ports_text, str) and ports_text:
+            self.esp32_serial_ports_text = ports_text
+
+        port = str(result.get("port", "")).strip()
+        if port:
+            self.esp32_port = port
+        baud = self._coerce_int(result.get("baud", self.esp32_baud), self.esp32_baud)
+        if baud >= 1200:
+            self.esp32_baud = baud
+
+        status = str(result.get("status", "")).strip()
+        if status:
+            self._set_esp32_scan_status(status)
+        self._set_esp32_scan_running(False)
+
+    @Slot()
     def refreshEsp32SerialPorts(self):
         ports = self._list_serial_ports()
         if ports:
@@ -1409,20 +1857,24 @@ class QmlBridge(QObject):
             self._append_log("[WARN] 当前已有 Makcu 检测任务在进行。")
             return
 
+        self._set_esp32_scan_running(True)
+        configured_baud = self.esp32_baud
+
         def _worker():
-            self._set_esp32_scan_running(True)
+            result = {"logs": []}
             try:
                 ports = self._list_serial_ports()
-                self.esp32_serial_ports_text = (
+                ports_text = (
                     "串口候选: " + ", ".join(item["port"] for item in ports[:12])
                     if ports
                     else "串口候选: 未发现可用 COM 口"
                 )
+                result["ports_text"] = ports_text
                 if not ports:
-                    self._set_esp32_scan_status("[WARN] Makcu 串口自动检测失败: 没有发现可用 COM 口。")
+                    result["status"] = "[WARN] Makcu 串口自动检测失败: 没有发现可用 COM 口。"
                     return
                 baud_candidates = []
-                for baud in (self.esp32_baud, 115200, 4000000):
+                for baud in (configured_baud, 115200, 4000000):
                     try:
                         parsed = int(baud)
                     except Exception:
@@ -1432,30 +1884,37 @@ class QmlBridge(QObject):
                 serial_mod, _ = self._load_pyserial()
                 if serial_mod is None:
                     best = ports[0]
-                    self.esp32_port = best["port"]
-                    self._set_esp32_scan_status(
+                    result.update(
+                        {
+                            "port": best["port"],
+                            "status": (
                         f"[WARN] 已优先选择串口 {best['port']}，但未安装 pyserial，暂无法自动握手验证。"
+                            ),
+                        }
                     )
-                    self._emit_state()
                     return
                 for port_item in ports:
                     for baud in baud_candidates:
                         ok, detail = self._probe_serial_port(port_item["port"], baud)
-                        self._append_log(
+                        result["logs"].append(
                             f"[INFO] 串口探测 {port_item['port']} @ {baud}: {'OK' if ok else detail}"
                         )
                         if ok:
-                            self.esp32_port = port_item["port"]
-                            self.esp32_baud = baud
-                            self._set_esp32_scan_status(
-                                f"[SUCCESS] 已探测到 Makcu 串口: {self.esp32_port} @ {self.esp32_baud} | {detail}"
+                            result.update(
+                                {
+                                    "port": port_item["port"],
+                                    "baud": baud,
+                                    "status": (
+                                        f"[SUCCESS] 已探测到 Makcu 串口: {port_item['port']} @ {baud} | {detail}"
+                                    ),
+                                }
                             )
-                            self._emit_state()
                             return
-                self._set_esp32_scan_status("[WARN] 未探测到可握手的 Makcu 串口，请确认 COM、波特率和 km.left() 查询协议。")
-                self._emit_state()
+                result["status"] = "[WARN] 未探测到可握手的 Makcu 串口，请确认 COM、波特率和 km.left() 查询协议。"
+            except Exception as exc:
+                result["status"] = f"[ERROR] Makcu 串口自动检测失败: {exc}"
             finally:
-                self._set_esp32_scan_running(False)
+                self.esp32SerialScanFinished.emit(result)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1465,24 +1924,27 @@ class QmlBridge(QObject):
             self._append_log("[WARN] 当前已有 Makcu 检测任务在进行。")
             return
 
+        self._set_esp32_scan_running(True)
+        port = self.esp32_port
+        baud = self.esp32_baud
+
         def _worker():
-            self._set_esp32_scan_running(True)
+            result = {"logs": [], "port": port, "baud": baud}
             try:
-                ok, detail = self._probe_serial_port(self.esp32_port, self.esp32_baud)
+                ok, detail = self._probe_serial_port(port, baud)
                 if ok:
-                    self.esp32_serial_ports_text = (
-                        f"串口候选: 当前目标 {self.esp32_port} @ {self.esp32_baud} 响应正常"
-                    )
-                    self._set_esp32_scan_status(
-                        f"[SUCCESS] 串口检测通过: {self.esp32_port} @ {self.esp32_baud} | {detail}"
+                    result.update(
+                        {
+                            "ports_text": f"串口候选: 当前目标 {port} @ {baud} 响应正常",
+                            "status": f"[SUCCESS] 串口检测通过: {port} @ {baud} | {detail}",
+                        }
                     )
                 else:
-                    self._set_esp32_scan_status(
-                        f"[WARN] 串口检测失败: {self.esp32_port} @ {self.esp32_baud} | {detail}"
-                    )
-                self._emit_state()
+                    result["status"] = f"[WARN] 串口检测失败: {port} @ {baud} | {detail}"
+            except Exception as exc:
+                result["status"] = f"[ERROR] 串口检测失败: {port} @ {baud} | {exc}"
             finally:
-                self._set_esp32_scan_running(False)
+                self.esp32SerialScanFinished.emit(result)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -2082,9 +2544,45 @@ class QmlBridge(QObject):
 
     @Slot("QVariantMap")
     def updateVisualSettings(self, data):
-        self._update_from_map(data)
+        values = data if isinstance(data, dict) else {}
         if self._is_pipeline_running():
+            # These values define how the runtime opens hardware and builds its
+            # capture/inference resources. Keep the running session stable and
+            # apply them on its next start instead.
+            restart_only = {
+                "model_path",
+                "engine_path",
+                "imgsz",
+                "roi",
+                "fps_limit",
+                "capture_source",
+                "capture_preview",
+                "capture_card_device_index",
+                "capture_card_device_name",
+                "capture_card_width",
+                "capture_card_height",
+                "capture_card_fps",
+                "capture_card_pixel_format",
+                "lghub_enabled",
+                "lghub",
+                "esp32_enabled",
+                "esp32_port",
+                "esp32_baud",
+                "pipeline_mode",
+                "motion_mode",
+                "aim_keys",
+                "trigger_keys",
+                "selected_classes",
+                "selected_classes_text",
+            }
+            live_values = {key: value for key, value in values.items() if key not in restart_only}
+            self._update_from_map(live_values)
+            deferred = sorted(key for key in values if key in restart_only)
+            if deferred:
+                self._append_log("[INFO] 运行中的需重启设置已保留，将在下次启动时生效。")
             self._write_pipeline_config()
+        else:
+            self._update_from_map(values)
         self._emit_state()
 
     @Slot(str)
@@ -2268,58 +2766,80 @@ class QmlBridge(QObject):
         trigger_keys = self._sanitize_vk_csv(self.trigger_keys, "1")
         pipeline_mode = self._pipeline_mode_code()
         motion_mode = self._motion_mode_code()
+        capture_source = self._normalize_capture_source(self.capture_source)
+        capture_config = self.capture_card_config
+        capture_device_name = self._runtime_config_text(
+            self._selected_capture_card_device_name() or self.capture_card_device_name
+        )
         show_preview = 1 if pipeline_mode == "debug" else 0
         trigger_mode = self._trigger_mode_code()
         texture_preprocess_enabled = self._is_texture_preprocess_engine(engine_path)
         texture_plugin_input = self._texture_plugin_input_size(engine_path)
         config_path = self.runtime_config_path
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        lines = [
+            f"engine_path={self._to_runtime_engine_config_path(engine_path)}\n",
+            f"capture_source={capture_source}\n",
+            f"capture_card_device_index={capture_config.device_index}\n",
+            f"capture_card_device_name={capture_device_name}\n",
+            f"capture_card_width={capture_config.width}\n",
+            f"capture_card_height={capture_config.height}\n",
+            f"capture_card_fps={capture_config.fps:.3f}\n",
+            f"capture_card_pixel_format={capture_config.pixel_format.lower()}\n",
+            f"capture_preview={1 if self.capture_preview_enabled else 0}\n",
+            f"roi_w={self.roi}\n",
+            f"roi_h={self.roi}\n",
+            f"conf={self.conf:.3f}\n",
+            f"nms={self.nms:.3f}\n",
+            f"pid_p={self.pid_p:.3f}\n",
+            f"pid_i={self.pid_i:.3f}\n",
+            f"pid_d={self.pid_d:.3f}\n",
+            f"stick_en={1 if self.stick_enable else 0}\n",
+            f"stick_int={self.stick_int:.3f}\n",
+            f"stick_rad={self.stick_rad:.3f}\n",
+            f"y_offset={self.y_offset:.3f}\n",
+            f"fps_limit={self.fps_limit}\n",
+            f"kalman_en={1 if self.kalman_en else 0}\n",
+            f"kalman_pred={self.kalman_pred:.2f}\n",
+            f"recoil_en={1 if self.recoil_en else 0}\n",
+            f"trigger_recoil_en={1 if self.trigger_recoil_en else 0}\n",
+            f"recoil_strength={self.recoil_strength:.3f}\n",
+            f"recoil_delay={self.recoil_delay:.1f}\n",
+            f"trigger_mode={trigger_mode}\n",
+            f"trigger_delay={self.trigger_delay:.1f}\n",
+            "trigger_click_hold_ms=45.0\n",
+            "trigger_click_gap_ms=10.0\n",
+            f"trigger_hitbox_enter_scale={self.trigger_hitbox_enter_scale:.2f}\n",
+            f"trigger_hitbox_exit_scale={self.trigger_hitbox_exit_scale:.2f}\n",
+            f"trigger_hold_grace_ms={self.trigger_hold_grace_ms:.1f}\n",
+            f"use_lghub={1 if self.lghub_enabled else 0}\n",
+            f"esp32_enabled={1 if self.esp32_enabled else 0}\n",
+            f"esp32_port={self.esp32_port}\n",
+            f"esp32_baud={self.esp32_baud}\n",
+            f"pipeline_mode={pipeline_mode}\n",
+            f"motion_mode={motion_mode}\n",
+            f"neural_curvature={self.neural_curvature:.3f}\n",
+            f"neural_tremor={self.neural_tremor:.3f}\n",
+            f"show_preview={show_preview}\n",
+            "async_double_buffer=0\n",
+            "roi_resource_double_buffer=1\n",
+        ]
+        if texture_preprocess_enabled:
+            lines.extend(
+                [
+                    "texture_preprocess_plugin=1\n",
+                    f"plugin_input_w={texture_plugin_input}\n",
+                    f"plugin_input_h={texture_plugin_input}\n",
+                ]
+            )
+        lines.extend(
+            [
+                f"aim_keys={aim_keys}\n",
+                f"trigger_keys={trigger_keys}\n",
+                f"target_classes={','.join(selected_classes)}\n",
+            ]
+        )
         try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                f.write(f"engine_path={self._to_runtime_engine_config_path(engine_path)}\n")
-                f.write(f"roi_w={self.roi}\n")
-                f.write(f"roi_h={self.roi}\n")
-                f.write(f"conf={self.conf:.3f}\n")
-                f.write(f"nms={self.nms:.3f}\n")
-                f.write(f"pid_p={self.pid_p:.3f}\n")
-                f.write(f"pid_i={self.pid_i:.3f}\n")
-                f.write(f"pid_d={self.pid_d:.3f}\n")
-                f.write(f"stick_en={1 if self.stick_enable else 0}\n")
-                f.write(f"stick_int={self.stick_int:.3f}\n")
-                f.write(f"stick_rad={self.stick_rad:.3f}\n")
-                f.write(f"y_offset={self.y_offset:.3f}\n")
-                f.write(f"fps_limit={self.fps_limit}\n")
-                f.write(f"kalman_en={1 if self.kalman_en else 0}\n")
-                f.write(f"kalman_pred={self.kalman_pred:.2f}\n")
-                f.write(f"recoil_en={1 if self.recoil_en else 0}\n")
-                f.write(f"trigger_recoil_en={1 if self.trigger_recoil_en else 0}\n")
-                f.write(f"recoil_strength={self.recoil_strength:.3f}\n")
-                f.write(f"recoil_delay={self.recoil_delay:.1f}\n")
-                f.write(f"trigger_mode={trigger_mode}\n")
-                f.write(f"trigger_delay={self.trigger_delay:.1f}\n")
-                f.write("trigger_click_hold_ms=45.0\n")
-                f.write("trigger_click_gap_ms=10.0\n")
-                f.write(f"trigger_hitbox_enter_scale={self.trigger_hitbox_enter_scale:.2f}\n")
-                f.write(f"trigger_hitbox_exit_scale={self.trigger_hitbox_exit_scale:.2f}\n")
-                f.write(f"trigger_hold_grace_ms={self.trigger_hold_grace_ms:.1f}\n")
-                f.write(f"use_lghub={1 if self.lghub_enabled else 0}\n")
-                f.write(f"esp32_enabled={1 if self.esp32_enabled else 0}\n")
-                f.write(f"esp32_port={self.esp32_port}\n")
-                f.write(f"esp32_baud={self.esp32_baud}\n")
-                f.write(f"pipeline_mode={pipeline_mode}\n")
-                f.write(f"motion_mode={motion_mode}\n")
-                f.write(f"neural_curvature={self.neural_curvature:.3f}\n")
-                f.write(f"neural_tremor={self.neural_tremor:.3f}\n")
-                f.write(f"show_preview={show_preview}\n")
-                f.write("async_double_buffer=0\n")
-                f.write("roi_resource_double_buffer=1\n")
-                if texture_preprocess_enabled:
-                    f.write("texture_preprocess_plugin=1\n")
-                    f.write(f"plugin_input_w={texture_plugin_input}\n")
-                    f.write(f"plugin_input_h={texture_plugin_input}\n")
-                f.write(f"aim_keys={aim_keys}\n")
-                f.write(f"trigger_keys={trigger_keys}\n")
-                f.write(f"target_classes={','.join(selected_classes)}\n")
+            atomic_write_text(config_path, "".join(lines))
         except Exception as exc:
             self._append_log(f"[ERROR] 写入 config.txt 失败: {exc}")
             return False
@@ -2346,7 +2866,17 @@ class QmlBridge(QObject):
             "trigger_pulse_click": "1",
             "trigger_recoil": "1",
             "license_status": "1",
+            "graceful_stop_event": "1",
         }
+        if self._normalize_capture_source(self.capture_source) == "capture_card":
+            required_capabilities.update(
+                {
+                    "capture_sources": "desktop,capture_card",
+                    "capture_card_backend": "media_foundation",
+                    "capture_card_preview": "1",
+                    "capture_card_cli": "1",
+                }
+            )
         if self._is_texture_preprocess_engine(self.engine_path):
             required_capabilities.update(
                 {
@@ -2371,7 +2901,7 @@ class QmlBridge(QObject):
             if missing:
                 self._append_log("[ERROR] 推理核心能力声明不完整，已阻止启动。")
                 self._append_log(f"[ERROR] 缺少能力: {', '.join(missing)}")
-                self._append_log("[HINT] 请重新部署 E:\\4.29\\429\\trt_cpp_pipeline\\deploy_runtime.bat")
+                self._append_log("[HINT] 请从正式工程 build_ninja 仅复制 TRT_ZeroCopy_Pipeline.exe 到 runtime。")
                 return False
             self._append_log(f"[INFO] 推理核心校验通过: {exe_path}")
             capability_label = "ROI_COPY_ONLY / safe config / TRT ready / CUDA checks / low-latency current-frame result"
@@ -2381,7 +2911,7 @@ class QmlBridge(QObject):
             return True
         except Exception as exc:
             self._append_log(f"[ERROR] 推理核心未返回结构化能力信息，已阻止启动: {exc}")
-            self._append_log("[HINT] 请重新部署 E:\\4.29\\429\\trt_cpp_pipeline\\deploy_runtime.bat")
+            self._append_log("[HINT] 请从正式工程 build_ninja 仅复制 TRT_ZeroCopy_Pipeline.exe 到 runtime。")
             return False
 
     @Slot("QVariantMap")
@@ -2390,6 +2920,10 @@ class QmlBridge(QObject):
         if self._is_pipeline_running():
             self._append_log("[WARN] 当前已有推理核心在运行。")
             return
+        if self.capture_source == "capture_card" and self.capture_card_preview_active:
+            # Most DirectShow capture cards permit one consumer only. Release the
+            # diagnostic QML preview before the inference core opens the device.
+            self.stopCaptureCardPreview()
         if self.lghub_enabled and not self._ensure_lghub_virtual_mouse_ready():
             return
         if not self._write_pipeline_config():
@@ -2411,7 +2945,8 @@ class QmlBridge(QObject):
         self._emit_state()
         self._append_log(
             f">> 已生成配置: Mode={pipeline_mode.upper()} ROI={self.roi} "
-            f"Conf={self.conf:.3f} CapturePath=ROI_COPY_ONLY "
+            f"Conf={self.conf:.3f} "
+            f"CapturePath={'MEDIA_FOUNDATION_CPU_TO_D3D11_TO_CUDA' if self.capture_source == 'capture_card' else 'ROI_COPY_ONLY'} "
             f"AimKeys=[{aim_keys}] TriggerKeys=[{trigger_keys}]"
         )
         if self._is_texture_preprocess_engine(engine_path):
@@ -2420,9 +2955,12 @@ class QmlBridge(QObject):
                 f"PluginInput={self._texture_plugin_input_size(engine_path)}"
             )
         self._pipeline_stop_requested = False
+        self._pipeline_stop_event_name = (
+            f"Local\\NekoPipelineStop-{os.getpid()}-{time.time_ns()}"
+        )
         try:
             self.pipeline_process = subprocess.Popen(
-                [exe_path],
+                [exe_path, "--stop-event", self._pipeline_stop_event_name],
                 cwd=os.path.dirname(exe_path),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -2431,6 +2969,7 @@ class QmlBridge(QObject):
             )
         except Exception as exc:
             self.pipeline_process = None
+            self._pipeline_stop_event_name = ""
             self.status_mode_text = "模式: 未启动"
             self._reset_runtime_metrics()
             self._emit_state()
@@ -2445,12 +2984,44 @@ class QmlBridge(QObject):
         # Pipeline output is pumped by _pump_pipeline_output when using hidden Popen.
         return
 
+    def _signal_pipeline_stop_event(self) -> bool:
+        event_name = self._pipeline_stop_event_name
+        if not event_name or os.name != "nt":
+            return False
+        try:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenEventW.argtypes = [ctypes.c_ulong, ctypes.c_bool, ctypes.c_wchar_p]
+            kernel32.OpenEventW.restype = ctypes.c_void_p
+            kernel32.SetEvent.argtypes = [ctypes.c_void_p]
+            kernel32.SetEvent.restype = ctypes.c_bool
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_bool
+            handle = kernel32.OpenEventW(0x0002, False, event_name)
+            if not handle:
+                self._append_log(
+                    f"[WARN] 无法打开推理核心停止事件，错误码: {ctypes.get_last_error()}"
+                )
+                return False
+            try:
+                if not kernel32.SetEvent(handle):
+                    self._append_log(
+                        f"[WARN] 无法通知推理核心优雅退出，错误码: {ctypes.get_last_error()}"
+                    )
+                    return False
+                return True
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception as exc:
+            self._append_log(f"[WARN] 推理核心优雅停止失败: {exc}")
+            return False
+
     def _pipeline_finished(self, process_id, exit_code):
         if self.pipeline_process and getattr(self.pipeline_process, "pid", -1) != process_id:
             return
         stopped_by_panel = self._pipeline_stop_requested
         self.pipeline_process = None
         self._pipeline_stop_requested = False
+        self._pipeline_stop_event_name = ""
         if stopped_by_panel:
             self._append_log("[INFO] 推理核心已停止。")
         elif exit_code == 0:
@@ -2466,11 +3037,16 @@ class QmlBridge(QObject):
     def stopPipeline(self):
         if self._is_pipeline_running():
             self._pipeline_stop_requested = True
-            self.pipeline_process.kill()
+            graceful_stop_sent = self._signal_pipeline_stop_event()
             try:
-                self.pipeline_process.wait(timeout=1.0)
+                self.pipeline_process.wait(timeout=1.5 if graceful_stop_sent else 0.2)
             except subprocess.TimeoutExpired:
-                pass
+                self.pipeline_process.kill()
+                try:
+                    self.pipeline_process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
+            self._pipeline_stop_event_name = ""
             self._append_log("[INFO] 已请求停止推理核心。")
             self.status_mode_text = "模式: 未启动"
             self._reset_runtime_metrics()
@@ -2479,6 +3055,7 @@ class QmlBridge(QObject):
 
     @Slot()
     def shutdown(self):
+        self.stopCaptureCardPreview()
         try:
             self.metrics_timer.stop()
         except Exception:
@@ -2490,13 +3067,7 @@ class QmlBridge(QObject):
         if self.conversion_process and self.conversion_process.state() != QProcess.NotRunning:
             self.conversion_process.kill()
             self.conversion_process.waitForFinished(500)
-        if self._is_pipeline_running():
-            self._pipeline_stop_requested = True
-            self.pipeline_process.kill()
-            try:
-                self.pipeline_process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
+        self.stopPipeline()
 
     def _get_log_text(self):
         return "\n".join(self._log_lines)
@@ -2590,6 +3161,54 @@ class QmlBridge(QObject):
 
     def _get_capture_path_text(self):
         return self.capture_path_text
+
+    def _get_capture_source(self):
+        return self.capture_source
+
+    def _get_capture_card_devices(self):
+        return [dict(device) for device in self.capture_card_devices]
+
+    def _get_capture_card_device_index(self):
+        return self.capture_card_config.device_index
+
+    def _get_capture_card_device_name(self):
+        return self.capture_card_device_name
+
+    def _get_capture_card_width(self):
+        return self.capture_card_config.width
+
+    def _get_capture_card_height(self):
+        return self.capture_card_config.height
+
+    def _get_capture_card_fps(self):
+        return self.capture_card_config.fps
+
+    def _get_capture_card_pixel_format(self):
+        return self.capture_card_config.pixel_format
+
+    def _get_capture_card_pixel_formats(self):
+        return list(PIXEL_FORMATS)
+
+    def _get_capture_card_status_text(self):
+        return self.capture_card_status_text
+
+    def _get_capture_card_preview_url(self):
+        return self.capture_card_preview_url
+
+    def _get_capture_card_preview_width(self):
+        return self.capture_card_preview_width
+
+    def _get_capture_card_preview_height(self):
+        return self.capture_card_preview_height
+
+    def _get_capture_card_preview_active(self):
+        return self.capture_card_preview_active
+
+    def _get_capture_preview_enabled(self):
+        return self.capture_preview_enabled
+
+    def _get_capture_card_refresh_running(self):
+        return self.capture_card_refresh_running
 
     def _get_motion_mode(self):
         return self.motion_mode
@@ -2808,6 +3427,22 @@ class QmlBridge(QObject):
     backgroundStatusText = Property(str, _get_background_status_text, notify=stateChanged)
     pipelineModeValue = Property(str, _get_pipeline_mode, notify=stateChanged)
     capturePathText = Property(str, _get_capture_path_text, notify=stateChanged)
+    captureSourceValue = Property(str, _get_capture_source, notify=stateChanged)
+    captureCardDevices = Property("QVariantList", _get_capture_card_devices, notify=stateChanged)
+    captureCardDeviceIndexValue = Property(int, _get_capture_card_device_index, notify=stateChanged)
+    captureCardDeviceNameValue = Property(str, _get_capture_card_device_name, notify=stateChanged)
+    captureCardWidthValue = Property(int, _get_capture_card_width, notify=stateChanged)
+    captureCardHeightValue = Property(int, _get_capture_card_height, notify=stateChanged)
+    captureCardFpsValue = Property(float, _get_capture_card_fps, notify=stateChanged)
+    captureCardPixelFormatValue = Property(str, _get_capture_card_pixel_format, notify=stateChanged)
+    captureCardPixelFormats = Property("QVariantList", _get_capture_card_pixel_formats, notify=stateChanged)
+    captureCardStatusText = Property(str, _get_capture_card_status_text, notify=stateChanged)
+    captureCardPreviewUrl = Property(str, _get_capture_card_preview_url, notify=stateChanged)
+    captureCardPreviewWidth = Property(int, _get_capture_card_preview_width, notify=stateChanged)
+    captureCardPreviewHeight = Property(int, _get_capture_card_preview_height, notify=stateChanged)
+    captureCardPreviewActive = Property(bool, _get_capture_card_preview_active, notify=stateChanged)
+    capturePreviewEnabledValue = Property(bool, _get_capture_preview_enabled, notify=stateChanged)
+    captureCardRefreshRunning = Property(bool, _get_capture_card_refresh_running, notify=stateChanged)
     motionModeValue = Property(str, _get_motion_mode, notify=stateChanged)
     neuralCurvatureValue = Property(float, _get_neural_curvature, notify=stateChanged)
     neuralTremorValue = Property(float, _get_neural_tremor, notify=stateChanged)

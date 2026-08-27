@@ -1,6 +1,6 @@
 {
-  "version": "2026.08.27.2",
-  "notes": "Makcu 串口协议适配与更新签名密钥轮换。旧签名客户端请先手动应用密钥迁移包。",
+  "version": "2026.08.27.4",
+  "notes": "QML-only panel release: capture-card input configuration and preview; removes retired Web panel files.",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -8,19 +8,23 @@
   ],
   "delete": [
     "keyauth.py",
-    "keyauth_login.py"
+    "keyauth_login.py",
+    "backend/web_panel_controller.py",
+    "backend/mobile_control_server.py",
+    "6_run_web_panel.vbs",
+    "run_web_panel_hidden.pyw"
   ],
   "packages": [
     {
       "name": "core",
-      "url": "../release_assets/neko-core-v2026.08.27.2.zip",
-      "sha256": "8E2E83F0897D2B8AB8D21A0407C1EED1627B9B239D1E83A466C5BE2A1CF0F0D3",
-      "size": 300249
+      "url": "../release_assets/neko-core-v2026.08.27.4.zip",
+      "sha256": "0C51A27D89FE3602B8C3332F9DB2AAD1D1776324AE9F358F350D98C553EE70C8",
+      "size": 288240
     }
   ],
   "signature": {
     "key_id": "neko-update-2026-08-27",
     "algorithm": "RS256",
-    "value": "pKgXe/eDfI06SejRUU7gZ5ns1+txsHiiI5UnyCBIAWwukvhOous3t7jI8AM8e0egaOlH1hcBpu4K1j0H8+vlhJj0lIhyJllp0SGg8r/eHpcMNeU79RE2P0daQvIaVDc9EJ9s1AV0OIYIllYHExYkB6SjkhDrC+c/mid3e+7AjQWCOtqlaQJnQBGPV8pgIA3CHw0ZPg7U8SD+6DgKD5mLCv67qw9stV9oOgEqY/A6mPtoW3cXyrphyRHkPbaBY1nKw+hCw4qUfDvRZH7SN/CO0hrKqAsC/AwDONZLXv+Rvz7TKCpInCCzilD81Ne/Hft4QOxEhKM6v4VlkJ0EeJizG9Kp9Q8UqG5Tct/mXGDD5jI3xgwgSgd6gPPVsO6N5SVC6fS7n9kQX4EuDWcfyoK0ZdChzgYL9tpVFiZK0ADE5VL09mlWBjrJku4u3MmKOgzynKrf7sC0pTyQ2BXuySYrN4MIhF6wsyxj8FYkdzly15rBmBD4AmsKDRz57iEYpS2a"
+    "value": "LxgZzfk6nEVdddC1+72Bb8M/E+JKFpRCT+er/soRv1+AlYZ4qt5ZDVzXUe80idnSo60yuq30Ia7y0XirJrJ3YzF/eQZbCuq8I8nXm2TH3O44ybaLxRb+YU7kYQxWuVwnNma0T13LwHPWCBHRjhZMD33bI2ddWIPJZON8D3MWp6la+Squ9RvcKF9uQlCCoOWnB3qYZP9Q67lrWA/YoPxUpnmsWwdR1B0P/PscUMp38n8k2sv4dckge2lNRiylf3QhSwmt8xaN8+bztOC0eqYQTgTPNzu1Y1kER1a9BjT5qXrMPkqFf6naCOXpe5h8N3cnLZXZq60heK1NGtXV+UcO9l67utVjfeleVi8X7nNSoPy2EvNM/5W1dkgrCyIlhAhPXXg8PaLoRaTb+YBXVrygTk5UUPtWMfTwU+WL0dJdCWYMdBBLNRJV9BUWSwAQMQByXfKv/9PoygdQj00pjwuLBeZqV2AmEt5wrDKSOavjTT7aylkrkujkkqj1OdgIMjjN"
   }
 }

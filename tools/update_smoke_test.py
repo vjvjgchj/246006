@@ -28,7 +28,6 @@ def main() -> int:
         release_package = release / "neko-core.zip"
         with zipfile.ZipFile(release_package, "w") as archive:
             archive.writestr("runtime/TRT_ZeroCopy_Pipeline.exe", b"new release runtime exe")
-            archive.writestr("backend/web_panel_controller.py", "new web controller")
             archive.writestr("backend/qml_bridge.py", "new qml bridge")
             archive.writestr("qml/Main.qml", "new qml")
             archive.writestr("6_run_qml_panel.vbs", "qml launcher")
@@ -37,6 +36,10 @@ def main() -> int:
         (project / "qml" / "Main.qml").write_text("legacy qml", encoding="utf-8")
         (project / "backend").mkdir(parents=True, exist_ok=True)
         (project / "backend" / "qml_bridge.py").write_text("legacy bridge", encoding="utf-8")
+        (project / "backend" / "web_panel_controller.py").write_text("retired web controller", encoding="utf-8")
+        (project / "backend" / "mobile_control_server.py").write_text("retired mobile server", encoding="utf-8")
+        (project / "6_run_web_panel.vbs").write_text("retired web launcher", encoding="utf-8")
+        (project / "run_web_panel_hidden.pyw").write_text("retired hidden web launcher", encoding="utf-8")
         manifest = release / "stable.json"
         manifest.write_text(
             json.dumps(
@@ -51,6 +54,12 @@ def main() -> int:
                             "size": release_package.stat().st_size,
                         }
                     ],
+                    "delete": [
+                        "backend/web_panel_controller.py",
+                        "backend/mobile_control_server.py",
+                        "6_run_web_panel.vbs",
+                        "run_web_panel_hidden.pyw",
+                    ],
                     "preserve": ["runtime/config.txt", "runtime/logi_driver.dll", "gui_settings.json"],
                 },
                 indent=2,
@@ -60,11 +69,14 @@ def main() -> int:
 
         backup_root = apply_manifest_update(project, manifest.as_uri())
         assert current_exe.read_bytes() == b"new release runtime exe"
-        assert (project / "backend" / "web_panel_controller.py").read_text(encoding="utf-8") == "new web controller"
         assert (project / "qml" / "Main.qml").read_text(encoding="utf-8") == "new qml"
         assert (project / "backend" / "qml_bridge.py").read_text(encoding="utf-8") == "new qml bridge"
         assert (project / "6_run_qml_panel.vbs").read_text(encoding="utf-8") == "qml launcher"
         assert (project / "run_panel_hidden.pyw").read_text(encoding="utf-8") == "qml hidden launcher"
+        assert not (project / "backend" / "web_panel_controller.py").exists()
+        assert not (project / "backend" / "mobile_control_server.py").exists()
+        assert not (project / "6_run_web_panel.vbs").exists()
+        assert not (project / "run_web_panel_hidden.pyw").exists()
         assert protected_driver.read_bytes() == b"protected driver"
         assert (backup_root / "runtime" / "TRT_ZeroCopy_Pipeline.exe").read_bytes() == b"old local runtime exe"
         assert (backup_root / "qml" / "Main.qml").read_text(encoding="utf-8") == "legacy qml"

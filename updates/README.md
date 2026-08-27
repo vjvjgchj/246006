@@ -36,8 +36,6 @@ python tools\make_update_package.py `
   --include 6_run_qml_panel.vbs `
   --include run_panel_hidden.pyw `
   --include gui_qml_trial.py `
-  --include 6_run_web_panel.vbs `
-  --include run_web_panel_hidden.pyw `
   --include NekoLauncher.ps1 `
   --include NekoLauncher.bat `
   --include panel_requirements.txt `
@@ -74,24 +72,23 @@ The updater protects these local files by default:
 - `runtime/logi_driver.dll`
 - `gui_settings.json`
 
-## Explicit Web-Only Rollback
+## QML-Only Release Cleanup
 
-QML is the main chain. Normal manifests must not delete QML files. Only when
-you intentionally publish a Web-only rollback should you add:
+QML is the only supported panel. When updating older installations that still
+contain the retired Web panel, add the explicit cleanup list:
 
 ```powershell
 python tools\make_github_update_manifest.py `
   --tag v2026.06.27.2 `
   --package dist\update_packages\neko-core-v2026.06.27.2.zip `
   --package-name core `
-  --web-only-delete `
-  --notes "web-only rollback release"
+  --qml-only-delete `
+  --notes "remove retired Web panel"
 ```
 
-That explicit rollback removes:
+That cleanup removes:
 
-- `qml/`
-- `backend/qml_bridge.py`
-- `6_run_qml_panel.vbs`
-- `run_panel_hidden.pyw`
-- `gui_qml_trial.py`
+- `backend/web_panel_controller.py`
+- `backend/mobile_control_server.py`
+- `6_run_web_panel.vbs`
+- `run_web_panel_hidden.pyw`

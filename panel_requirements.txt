@@ -1,9 +1,6 @@
-requests
 PySide6
 pywin32
-discord-interactions
-qrcode[pil]
-Pillow
+opencv-python==4.11.0.86
 onnx
 pynput
 pyserial

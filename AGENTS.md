@@ -8,8 +8,8 @@ active runtime package, not as the authoritative C++ core source tree.
 - `E:\4.29\429\neko` is the active panel/runtime package.
 - `E:\4.29\429\neko\backend\qml_bridge.py` is the active QML panel backend. It writes runtime config, validates `--capabilities`, and launches the runtime executable.
 - `E:\4.29\429\neko\qml\Main.qml` is the active QML UI.
-- `E:\4.29\429\neko\backend\web_panel_controller.py` and `E:\4.29\429\neko\backend\mobile_control_server.py` are retained as a Web fallback/diagnostic path, not the default main chain.
-- Do not delete `backend\qml_bridge.py`, `qml\Main.qml`, `6_run_qml_panel.vbs`, `run_panel_hidden.pyw`, or `gui_qml_trial.py` from normal update packages. Only remove them when the user explicitly asks for a Web-only rollback.
+- QML is the only supported panel chain. Do not reintroduce a Web fallback or a browser/mobile-control service without an explicit user request.
+- Do not delete `backend\qml_bridge.py`, `qml\Main.qml`, `6_run_qml_panel.vbs`, `run_panel_hidden.pyw`, or `gui_qml_trial.py` from normal update packages.
 - The QML panel must not prompt for card-key login at startup. License/card-key validation belongs to the runtime core when launching inference.
 - `E:\4.29\429\neko\runtime` is the directory the panel actually runs from.
 - `E:\4.29\429\neko\runtime\config.txt` is the runtime config consumed by the executable.
@@ -61,6 +61,7 @@ The panel expects `TRT_ZeroCopy_Pipeline.exe --capabilities` to include these va
 - `trigger_pulse_click=1`
 - `trigger_recoil=1`
 - `license_status=1`
+- `graceful_stop_event=1`
 - `texture_preprocess_plugin=1`
 - `texture_preprocess_plugin_fp16=1`
 
