@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -18,6 +20,15 @@ DEFAULT_PROTECTED_PATHS = {
     "runtime/logi_driver.dll",
     "gui_settings.json",
 }
+
+UPDATE_PUBLIC_KEY_ID = "neko-update-2026-08-27"
+UPDATE_PUBLIC_KEY_MODULUS = (
+    "ulf+JmecuyfFay9/OYn9U4sNY+vndzW9dEPhRSxjCgkoPRdri8LKyQzyFNUYeKlmXim9jEwTjrfuszRcQThHj7Mf4csMXrUCHd/L4fawM6mHt97picczt5eAQr7GeqoGbJyJKbnlfa2HIqDXjsIHrsl8tzhwqS7Ii2XHbz7pRQgY6Ggz+zIGmoBgBut4WS481vwrTxE2fx1S79A0AmTNJjrhXjP3P61A+bPhmGSJGqodJMEJ0ZetMc9a80bHDpyQWfzuxmTmN8Kvc14WLZftmelgChm7hkwsslmCvLKUo9oQ7Y/CXb0f2mgY8SseroQWnOYlWfnIX3uo5qYA5OcEClVWNjZnA2ubM97YbQr2m8gsfM5KUDGv2tG0SczD27exzv3UyzI5uAiHnaXGM6cvjPM6HL3MP5sYAIMxsvFP0g/W2Fv9/OT5wEAwe7xYLXsgSJ4AXA9lfmrLmoUg4SvlxKh2mRjhpfMCGdi4CCdCqs9VKr4ZeF1XwiU3BDhsffvx"
+)
+UPDATE_PUBLIC_KEY_EXPONENT = 65537
+SHA256_DIGEST_INFO_PREFIX = bytes.fromhex("3031300D060960864801650304020105000420")
+WINDOWS_SHORT_NAME_RE = re.compile(r"^[^~]{1,6}~\d+(?:\.[^.]{0,3})?$")
+SAFE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class UpdateError(RuntimeError):
@@ -51,14 +62,34 @@ class UpdateManifest:
 
 
 def normalize_relative_path(value: str) -> str:
-    path = str(value or "").replace("\\", "/").strip()
-    if not path:
+    path = str(value or "").replace("\\", "/")
+    if path != path.strip() or not path:
         raise UpdateError("empty update path")
-    if path.startswith("/") or path.startswith("../") or "/../" in f"/{path}/":
+    if path.startswith("/"):
         raise UpdateError(f"unsafe update path: {value}")
-    if ":" in Path(path).parts[0]:
-        raise UpdateError(f"absolute update path is not allowed: {value}")
-    return path
+
+    parts = []
+    for part in path.split("/"):
+        if part in ("", "."):
+            continue
+        if (
+            part == ".."
+            or part.endswith((".", " "))
+            or ":" in part
+            or WINDOWS_SHORT_NAME_RE.fullmatch(part)
+        ):
+            raise UpdateError(f"unsafe update path: {value}")
+        parts.append(part)
+    if not parts:
+        raise UpdateError(f"unsafe update path: {value}")
+    return "/".join(parts)
+
+
+def normalize_manifest_version(value: object) -> str:
+    version = str(value or "").strip() or "unknown"
+    if not SAFE_VERSION_RE.fullmatch(version):
+        raise UpdateError(f"unsafe update version: {value}")
+    return version
 
 
 def safe_project_path(project_root: Path, relative_path: str) -> Path:
@@ -88,6 +119,35 @@ def _read_url_bytes(url: str, timeout: int = 30) -> bytes:
         raise UpdateError(f"unsupported update URL scheme: {parsed.scheme}")
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return response.read()
+
+
+def _canonical_manifest_bytes(payload: dict) -> bytes:
+    unsigned = dict(payload)
+    unsigned.pop("signature", None)
+    return json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _verify_remote_manifest_signature(payload: dict) -> None:
+    signature = payload.get("signature")
+    if not isinstance(signature, dict):
+        raise UpdateError("remote update manifest is unsigned")
+    if signature.get("key_id") != UPDATE_PUBLIC_KEY_ID or signature.get("algorithm") != "RS256":
+        raise UpdateError("remote update manifest signature metadata is invalid")
+    try:
+        raw_signature = base64.b64decode(str(signature["value"]), validate=True)
+    except Exception as exc:
+        raise UpdateError("remote update manifest signature is invalid") from exc
+
+    modulus = int.from_bytes(base64.b64decode(UPDATE_PUBLIC_KEY_MODULUS, validate=True), "big")
+    key_size = (modulus.bit_length() + 7) // 8
+    if len(raw_signature) != key_size:
+        raise UpdateError("remote update manifest signature has an invalid length")
+    digest_info = SHA256_DIGEST_INFO_PREFIX + hashlib.sha256(_canonical_manifest_bytes(payload)).digest()
+    padding_size = key_size - len(digest_info) - 3
+    expected = b"\x00\x01" + (b"\xff" * padding_size) + b"\x00" + digest_info
+    actual = pow(int.from_bytes(raw_signature, "big"), UPDATE_PUBLIC_KEY_EXPONENT, modulus).to_bytes(key_size, "big")
+    if not hmac.compare_digest(actual, expected):
+        raise UpdateError("remote update manifest signature verification failed")
 
 
 def _download_url_to_path(url: str, target: Path, timeout: int = 30) -> None:
@@ -185,6 +245,11 @@ def load_manifest(manifest_url: str) -> UpdateManifest:
         payload = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         raise UpdateError(f"invalid update manifest: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise UpdateError("invalid update manifest: expected an object")
+
+    if urlparse(manifest_url).scheme.lower() in ("http", "https"):
+        _verify_remote_manifest_signature(payload)
 
     files = []
     for entry in payload.get("files", []):
@@ -216,7 +281,7 @@ def load_manifest(manifest_url: str) -> UpdateManifest:
         raise UpdateError("manifest has no update files or packages")
 
     return UpdateManifest(
-        version=str(payload.get("version", "")).strip() or "unknown",
+        version=normalize_manifest_version(payload.get("version")),
         notes=str(payload.get("notes", "")).strip(),
         files=files,
         packages=packages,

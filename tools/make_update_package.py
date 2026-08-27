@@ -13,6 +13,7 @@ DEFAULT_EXCLUDES = [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
     "gui_settings.json",
+    "backend/atomic_file.py",
     "updates/stable.json",
 ]
 

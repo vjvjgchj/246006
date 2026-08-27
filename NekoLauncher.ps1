@@ -6,6 +6,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:UpdatePublicKeyId = "neko-update-2026-08-27"
+$script:UpdatePublicKeyModulus = "ulf+JmecuyfFay9/OYn9U4sNY+vndzW9dEPhRSxjCgkoPRdri8LKyQzyFNUYeKlmXim9jEwTjrfuszRcQThHj7Mf4csMXrUCHd/L4fawM6mHt97picczt5eAQr7GeqoGbJyJKbnlfa2HIqDXjsIHrsl8tzhwqS7Ii2XHbz7pRQgY6Ggz+zIGmoBgBut4WS481vwrTxE2fx1S79A0AmTNJjrhXjP3P61A+bPhmGSJGqodJMEJ0ZetMc9a80bHDpyQWfzuxmTmN8Kvc14WLZftmelgChm7hkwsslmCvLKUo9oQ7Y/CXb0f2mgY8SseroQWnOYlWfnIX3uo5qYA5OcEClVWNjZnA2ubM97YbQr2m8gsfM5KUDGv2tG0SczD27exzv3UyzI5uAiHnaXGM6cvjPM6HL3MP5sYAIMxsvFP0g/W2Fv9/OT5wEAwe7xYLXsgSJ4AXA9lfmrLmoUg4SvlxKh2mRjhpfMCGdi4CCdCqs9VKr4ZeF1XwiU3BDhsffvx"
+$script:UpdatePublicKeyExponent = "AQAB"
+$script:LegacyBootstrapManifests = @{
+    "https://gitee.com/w246006/246006/raw/main/updates/stable.json" = "5D39FE423218229E806C4438F213F4E9632C66B567F1B6CA9874E3E301921C99"
+    "https://raw.githubusercontent.com/vjvjgchj/246006/main/updates/stable.json" = "5D39FE423218229E806C4438F213F4E9632C66B567F1B6CA9874E3E301921C99"
+}
 
 function Write-Info($Message) {
     Write-Host "[INFO] $Message"
@@ -23,14 +30,30 @@ function Resolve-DefaultInstallDir {
 }
 
 function Normalize-RelativePath([string]$Value) {
-    $path = ($Value -replace "\\", "/").Trim().TrimStart("/")
+    $path = $Value -replace "\\", "/"
+    if ($path -ne $path.Trim()) {
+        throw "Unsafe update path: $Value"
+    }
     if ([string]::IsNullOrWhiteSpace($path)) {
         throw "Empty update path."
     }
-    if ($path.StartsWith("../") -or $path.Contains("/../") -or $path.Contains(":")) {
+    if ($path.StartsWith("/")) {
         throw "Unsafe update path: $Value"
     }
-    return $path
+    $parts = @()
+    foreach ($part in $path.Split("/")) {
+        if ([string]::IsNullOrEmpty($part) -or $part -eq ".") {
+            continue
+        }
+        if ($part -eq ".." -or $part.EndsWith(".") -or $part.EndsWith(" ") -or $part.Contains(":") -or $part -match "^[^~]{1,6}~\d+(?:\.[^.]{0,3})?$") {
+            throw "Unsafe Windows update path: $Value"
+        }
+        $parts += $part
+    }
+    if ($parts.Count -lt 1) {
+        throw "Unsafe update path: $Value"
+    }
+    return $parts -join "/"
 }
 
 function ConvertTo-FullPath([string]$PathValue) {
@@ -43,6 +66,18 @@ function Assert-UnderPath([string]$PathValue, [string]$ParentPath) {
     if (-not ($full.Equals($parent, [System.StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($parent + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))) {
         throw "Refusing path outside install dir: $full"
     }
+    $relative = $full.Substring($parent.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $current = $parent
+    foreach ($part in $relative.Split([System.IO.Path]::DirectorySeparatorChar, [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        $current = Join-Path $current $part
+        if (-not (Test-Path -LiteralPath $current)) {
+            break
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing update path through a reparse point: $current"
+        }
+    }
 }
 
 function Test-SameOrChild([string]$Path, [string]$Parent) {
@@ -51,7 +86,119 @@ function Test-SameOrChild([string]$Path, [string]$Parent) {
 }
 
 function Get-Sha256([string]$PathValue) {
-    return (Get-FileHash -LiteralPath $PathValue -Algorithm SHA256).Hash.ToUpperInvariant()
+    $getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHash) {
+        return (Get-FileHash -LiteralPath $PathValue -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($PathValue)
+    try {
+        return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("X2") }) -join "")
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
+function Get-Sha256Bytes([byte[]]$Bytes) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha.ComputeHash($Bytes) | ForEach-Object { $_.ToString("X2") }) -join "")
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function ConvertTo-CanonicalJson([object]$Value, [bool]$ExcludeTopLevelSignature = $false) {
+    if ($null -eq $Value) {
+        return "null"
+    }
+    if ($Value -is [string] -or $Value -is [char]) {
+        return $script:JsonSerializer.Serialize([string]$Value)
+    }
+    if ($Value -is [bool]) {
+        if ($Value) { return "true" }
+        return "false"
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $names = [string[]]@($Value.Keys | ForEach-Object { [string]$_ })
+        [Array]::Sort($names, [System.StringComparer]::Ordinal)
+        $parts = @()
+        foreach ($name in $names) {
+            if ($ExcludeTopLevelSignature -and $name -eq "signature") { continue }
+            $parts += $script:JsonSerializer.Serialize($name) + ":" + (ConvertTo-CanonicalJson $Value[$name])
+        }
+        return "{" + ($parts -join ",") + "}"
+    }
+    if ($Value -is [pscustomobject]) {
+        $names = [string[]]@($Value.PSObject.Properties.Name)
+        [Array]::Sort($names, [System.StringComparer]::Ordinal)
+        $parts = @()
+        foreach ($name in $names) {
+            if ($ExcludeTopLevelSignature -and $name -eq "signature") { continue }
+            $parts += $script:JsonSerializer.Serialize($name) + ":" + (ConvertTo-CanonicalJson $Value.$name)
+        }
+        return "{" + ($parts -join ",") + "}"
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $parts = @()
+        foreach ($item in $Value) {
+            $parts += ConvertTo-CanonicalJson $item
+        }
+        return "[" + ($parts -join ",") + "]"
+    }
+    if ($Value -is [double] -or $Value -is [single]) {
+        return $Value.ToString("R", [Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($Value -is [decimal]) {
+        return $Value.ToString([Globalization.CultureInfo]::InvariantCulture)
+    }
+    return [Convert]::ToString($Value, [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Test-ManifestSignature([object]$Manifest) {
+    if ($null -eq $Manifest.signature) {
+        return $false
+    }
+    if ([string]$Manifest.signature.key_id -ne $script:UpdatePublicKeyId -or [string]$Manifest.signature.algorithm -ne "RS256") {
+        throw "Update manifest signature metadata is invalid."
+    }
+    try {
+        $signature = [Convert]::FromBase64String([string]$Manifest.signature.value)
+    }
+    catch {
+        throw "Update manifest signature encoding is invalid."
+    }
+    $canonical = ConvertTo-CanonicalJson $Manifest $true
+    $data = [Text.Encoding]::UTF8.GetBytes($canonical)
+    $parameters = New-Object System.Security.Cryptography.RSAParameters
+    $parameters.Modulus = [Convert]::FromBase64String($script:UpdatePublicKeyModulus)
+    $parameters.Exponent = [Convert]::FromBase64String($script:UpdatePublicKeyExponent)
+    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    try {
+        $rsa.ImportParameters($parameters)
+        return $rsa.VerifyData($data, [System.Security.Cryptography.CryptoConfig]::MapNameToOID("SHA256"), $signature)
+    }
+    finally {
+        $rsa.Dispose()
+    }
+}
+
+function Assert-RemoteManifestAuthentic([string]$Url, [byte[]]$RawBytes, [object]$Manifest) {
+    if ($null -ne $Manifest.signature) {
+        if (-not (Test-ManifestSignature $Manifest)) {
+            throw "Update manifest signature verification failed."
+        }
+        return
+    }
+    $expectedLegacyHash = $script:LegacyBootstrapManifests[$Url]
+    if ($expectedLegacyHash -and (Get-Sha256Bytes $RawBytes) -eq $expectedLegacyHash) {
+        return
+    }
+    throw "Remote update manifest is unsigned."
 }
 
 function Invoke-DownloadFile([string]$Url, [string]$OutputPath) {
@@ -82,16 +229,24 @@ function Invoke-DownloadFile([string]$Url, [string]$OutputPath) {
 }
 
 function Get-Manifest([string]$Url, [string]$TempDir) {
+    $manifestPath = ""
+    $isRemote = $Url.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase) -or $Url.StartsWith("http://", [System.StringComparison]::OrdinalIgnoreCase)
     if ($Url.StartsWith("file://", [System.StringComparison]::OrdinalIgnoreCase)) {
         $manifestPath = ([Uri]$Url).LocalPath
-        return Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
-    if (Test-Path -LiteralPath $Url -PathType Leaf) {
-        return Get-Content -LiteralPath $Url -Raw -Encoding UTF8 | ConvertFrom-Json
+    elseif (Test-Path -LiteralPath $Url -PathType Leaf) {
+        $manifestPath = $Url
     }
-    $manifestPath = Join-Path $TempDir "stable.json"
-    Invoke-DownloadFile $Url $manifestPath
-    return Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    else {
+        $manifestPath = Join-Path $TempDir "stable.json"
+        Invoke-DownloadFile $Url $manifestPath
+    }
+    $rawBytes = [System.IO.File]::ReadAllBytes($manifestPath)
+    $manifest = [Text.Encoding]::UTF8.GetString($rawBytes) | ConvertFrom-Json
+    if ($isRemote) {
+        Assert-RemoteManifestAuthentic $Url $rawBytes $manifest
+    }
+    return $manifest
 }
 
 function Resolve-AssetUrl([string]$ManifestUrlValue, [string]$AssetUrl) {
@@ -196,6 +351,8 @@ function Remove-ManifestPaths([string]$InstallRoot, [object]$Manifest, [string[]
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     throw "PowerShell 5.1 or newer is required."
 }
+Add-Type -AssemblyName System.Web.Extensions
+$script:JsonSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
 
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $InstallDir = Resolve-DefaultInstallDir
@@ -215,6 +372,9 @@ New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 $manifest = Get-Manifest $ManifestUrl $tempDir
 if ([string]::IsNullOrWhiteSpace($manifest.version)) {
     throw "Manifest has no version."
+}
+if ([string]$manifest.version -notmatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") {
+    throw "Manifest version is unsafe."
 }
 if ($null -eq $manifest.packages -or $manifest.packages.Count -lt 1) {
     throw "Launcher requires a packages[] manifest. Current manifest does not contain packages[]."

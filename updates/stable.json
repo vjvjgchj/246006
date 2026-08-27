@@ -1,6 +1,6 @@
 {
-  "version": "2026.07.31.1",
-  "notes": "补全 QML 主链路：管理员启动入口、隐藏启动器、QML 应用入口、面板后端与主界面",
+  "version": "2026.08.27.2",
+  "notes": "Makcu 串口协议适配与更新签名密钥轮换。旧签名客户端请先手动应用密钥迁移包。",
   "preserve": [
     "runtime/config.txt",
     "runtime/logi_driver.dll",
@@ -12,15 +12,15 @@
   ],
   "packages": [
     {
-      "name": "qml-panel",
-      "url": "../release_assets/neko-qml-panel-v2026.07.31.1.zip",
-      "sha256": "6F897ABEBB80A3302E24617E3592E34133893EA20FC89A10C1213290FF481BAA",
-      "size": 43981
+      "name": "core",
+      "url": "../release_assets/neko-core-v2026.08.27.2.zip",
+      "sha256": "8E2E83F0897D2B8AB8D21A0407C1EED1627B9B239D1E83A466C5BE2A1CF0F0D3",
+      "size": 300249
     }
   ],
   "signature": {
-    "key_id": "neko-update-2026-01",
+    "key_id": "neko-update-2026-08-27",
     "algorithm": "RS256",
-    "value": "kzt0zPQzbw5FhQTafJ9vxhy4v3tn3HCNqSe5b3ecC/r/1lfiJ/9gqUkkhmygxrdYfuJVzUi/q0uVAlPIXIL7vrLiouzgMFyQEggL7jpkWCsRDEjQ+6toar30IW+YNO8zaUdfTcAmiFA6uaJg45opU0D2H2oQK195eY5vCpeVt6FWU0dLoPcPKRxZhvPZvwgKgN8RXFperaVVaKLEZtAjxLPTS+HBVHDECyh8NRhUUMMb4riPrzSr+0E9O38q0qF+4uz8nEDV2bqmyWqlJjLJiKf4ofiHOb85EcHbTVHNmsXPJL+TgP+3x7INWotSQj5zrF45aAmIpqBwufUwThQ6jg=="
+    "value": "pKgXe/eDfI06SejRUU7gZ5ns1+txsHiiI5UnyCBIAWwukvhOous3t7jI8AM8e0egaOlH1hcBpu4K1j0H8+vlhJj0lIhyJllp0SGg8r/eHpcMNeU79RE2P0daQvIaVDc9EJ9s1AV0OIYIllYHExYkB6SjkhDrC+c/mid3e+7AjQWCOtqlaQJnQBGPV8pgIA3CHw0ZPg7U8SD+6DgKD5mLCv67qw9stV9oOgEqY/A6mPtoW3cXyrphyRHkPbaBY1nKw+hCw4qUfDvRZH7SN/CO0hrKqAsC/AwDONZLXv+Rvz7TKCpInCCzilD81Ne/Hft4QOxEhKM6v4VlkJ0EeJizG9Kp9Q8UqG5Tct/mXGDD5jI3xgwgSgd6gPPVsO6N5SVC6fS7n9kQX4EuDWcfyoK0ZdChzgYL9tpVFiZK0ADE5VL09mlWBjrJku4u3MmKOgzynKrf7sC0pTyQ2BXuySYrN4MIhF6wsyxj8FYkdzly15rBmBD4AmsKDRz57iEYpS2a"
   }
 }
